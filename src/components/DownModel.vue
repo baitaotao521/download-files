@@ -15,12 +15,24 @@
       <p> {{ $t('text8',{totalLength}) }}</p>
       <p> {{ $t('text9',{totalSize:getFileSize(totalSize)})}}</p>
       <p> {{ $t('text10',{getCompletedIdsLength})}}</p>
+      <p style="color:red" v-if="getFailedIdsLength > 0">{{ $t('text21',{failedCount: getFailedIdsLength})}}</p>
       <p>{{ maxInfo }}</p>
       <p>{{ zipProgressText }}</p>
       <p style="color:red" v-if="!!zipError">{{ $t('text11') }}</p>
 
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <div style="flex: 1;"></div>
+        <el-button 
+          v-if="getFailedIdsLength > 0"
+          size="small" 
+          :type="showFailedOnly ? 'primary' : 'default'"
+          @click="showFailedOnly = !showFailedOnly"
+        >
+          {{ showFailedOnly ? $t('text22') : $t('text23') }}
+        </el-button>
+      </div>
       <el-table
-        :data="fileInfo"
+        :data="filteredFileInfo"
         style="width: 100%"
         show-overflow-tooltip
         size="small"
@@ -78,6 +90,7 @@ const emit = defineEmits(['finsh'])
 const MAX_SIZE = 1073741824 * 1 // 1G
 const warnList = ref([])
 const completedIds = ref(new Set())
+const failedIds = ref(new Set())
 const zipError = ref(false)
 const totalSize = ref(0)
 const totalLength = ref(0)
@@ -85,6 +98,7 @@ const fileInfo = ref([])
 const maxInfo = ref('')
 const fileCellLength = ref(0)
 const zipProgressText = ref('')
+const showFailedOnly = ref(false)
 
 const props = defineProps({
   zipName: {
@@ -98,6 +112,17 @@ const props = defineProps({
 })
 const getCompletedIdsLength = computed(() => {
   return completedIds.value.size
+})
+
+const getFailedIdsLength = computed(() => {
+  return failedIds.value.size
+})
+
+const filteredFileInfo = computed(() => {
+  if (showFailedOnly.value) {
+    return fileInfo.value.filter(item => item.type === 'error')
+  }
+  return fileInfo.value
 })
 
 const percent = computed(() => {
@@ -150,6 +175,7 @@ onMounted(async() => {
     if (itemIndex !== -1) {
       fileInfo.value[itemIndex].type = 'error'
       fileInfo.value[itemIndex].percentage = message
+      failedIds.value.add(index)
       debouncedSortFileInfo()
     }
   })

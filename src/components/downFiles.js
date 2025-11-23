@@ -182,10 +182,11 @@ class FileDownloader {
       this.emit('warn', $t('text20', { length: maxChunksList.length }))
     }
 
+    const concurrency = this.concurrentDownloads || 5
     for (const zipList of zipsList) {
       this.zip = new JSZip()
       this.currentTotalSize = 0 // 重置当前总大小
-      const superTask = new SuperTask(5)
+      const superTask = new SuperTask(concurrency)
       const tasks = zipList.map((fileInfo) => {
         return async() => await this.processFile(fileInfo)
       })
