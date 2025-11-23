@@ -20,8 +20,7 @@
       <p>{{ zipProgressText }}</p>
       <p style="color:red" v-if="!!zipError">{{ $t('text11') }}</p>
 
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <div style="flex: 1;"></div>
+      <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 8px;">
         <el-button 
           v-if="getFailedIdsLength > 0"
           size="small" 

@@ -74,6 +74,8 @@
   "text22": "Show All Files",
   "text23": "Show Failed Files Only",
   "text24": "Concurrent Downloads",
-  "text25": "Number of files to download simultaneously. Increasing this can speed up downloads but may affect browser performance"
+  "text25": "Number of files to download simultaneously. Increasing this can speed up downloads but may affect browser performance",
+  "error_concurrent_downloads_required": "Please enter the number of concurrent downloads",
+  "error_concurrent_downloads_range": "Concurrent downloads must be between 1 and 20"
 
 }
