@@ -119,7 +119,7 @@ const getFailedIdsLength = computed(() => {
 
 const filteredFileInfo = computed(() => {
   if (showFailedOnly.value) {
-    return fileInfo.value.filter(item => item.type === 'error')
+    return fileInfo.value.filter(item => failedIds.value.has(item.index))
   }
   return fileInfo.value
 })

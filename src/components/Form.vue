@@ -325,7 +325,9 @@ import DownModel from './DownModel.vue'
 import draggable from 'vuedraggable'
 
 import { SUPPORT_TYPES, getInfoByTableMetaList, sortByOrder } from '@/hooks/useBitable.js'
+import { i18n } from '@/locales/i18n.js'
 
+const $t = i18n.global.t
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
@@ -401,14 +403,14 @@ const rules = reactive({
   concurrentDownloads: [
     {
       required: true,
-      message: '请输入并发下载数',
+      message: $t('error_concurrent_downloads_required'),
       trigger: 'change'
     },
     {
       type: 'number',
       min: 1,
       max: 20,
-      message: '并发下载数必须在1到20之间',
+      message: $t('error_concurrent_downloads_range'),
       trigger: 'change'
     }
   ],
