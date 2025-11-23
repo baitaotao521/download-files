@@ -184,6 +184,35 @@
           <el-option :label="$t('zip_download')" :value="1" />
         </el-select>
       </el-form-item>
+      <el-form-item 
+        :label="$t('text24')" 
+        prop="concurrentDownloads"
+        v-if="formData.downloadType === 1"
+      >
+        <template #label>
+          <p style="display: flex; align-items: center">
+            <span style="margin-right: 2px">{{ $t('text24') }}</span>
+            <el-popover
+              placement="top-start"
+              trigger="hover"
+              :content="$t('text25')"
+            >
+              <template #reference>
+                <el-icon>
+                  <InfoFilled />
+                </el-icon>
+              </template>
+            </el-popover>
+          </p>
+        </template>
+        <el-input-number 
+          v-model="formData.concurrentDownloads" 
+          :min="1" 
+          :max="20"
+          :step="1"
+          style="width: 100%"
+        />
+      </el-form-item>
       <div style="display: flex">
         <el-form-item
           prop="downloadTypeByFolders"
@@ -296,7 +325,9 @@ import DownModel from './DownModel.vue'
 import draggable from 'vuedraggable'
 
 import { SUPPORT_TYPES, getInfoByTableMetaList, sortByOrder } from '@/hooks/useBitable.js'
+import { i18n } from '@/locales/i18n.js'
 
+const $t = i18n.global.t
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
@@ -310,7 +341,8 @@ const formData = reactive({
   downloadType: 1,
   downloadTypeByFolders: false,
   firstFolderKey: '',
-  secondFolderKey: ''
+  secondFolderKey: '',
+  concurrentDownloads: 5
 })
 const rules = reactive({
   tableId: [
@@ -365,6 +397,20 @@ const rules = reactive({
     {
       required: true,
       message: '请选择文件下载方式',
+      trigger: 'change'
+    }
+  ],
+  concurrentDownloads: [
+    {
+      required: true,
+      message: $t('error_concurrent_downloads_required'),
+      trigger: 'change'
+    },
+    {
+      type: 'number',
+      min: 1,
+      max: 20,
+      message: $t('error_concurrent_downloads_range'),
       trigger: 'change'
     }
   ],
