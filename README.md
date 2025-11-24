@@ -24,6 +24,14 @@ python scripts/ws_downloader.py \
 
 所有参数均可省略以使用默认值。终端按 `Ctrl+C` 即可退出服务。
 
+可选参数说明：
+
+- `--host`：服务监听地址，默认 `127.0.0.1`。可改为 `0.0.0.0` 让局域网内其他设备访问。
+- `--port`：WebSocket 端口，默认 `11548`。若被占用可指定其他端口，并在前端“高级设置”中同步修改。
+- `--output`：文件保存目录，默认 `./downloads`。相对路径会以当前工作目录为基准。
+- `--log-level`：日志级别，可选 `DEBUG/INFO/WARNING/ERROR`，默认 `INFO`。
+- `--download-concurrency`：Python 端下载并发数，默认 `5`。不建议设置过大以免触发限流。
+
 ### 桌面程序
 
 ```bash
