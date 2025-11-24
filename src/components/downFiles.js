@@ -19,6 +19,11 @@ const $t = i18n.global.t
 const MAX_ZIP_SIZE_NUM = 1
 
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
+const MAX_RECORD_PAGE_SIZE = 200
+const WEBSOCKET_MESSAGE_TYPE = 'feishu_attachment_link'
+const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
+const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
+const WEBSOCKET_OPEN_STATE = 1
 
 class FileDownloader {
   constructor(formData) {
@@ -35,7 +40,7 @@ class FileDownloader {
   }
   async loopGetRecordIdList(list = [], pageToken) {
     const params = {
-      pageSize: 200,
+      pageSize: Math.min(MAX_RECORD_PAGE_SIZE, this.recordPageSize || MAX_RECORD_PAGE_SIZE),
       viewId: this.viewId
     }
     if (pageToken) {
@@ -133,9 +138,8 @@ class FileDownloader {
     })
   }
   async setFolderPath() {
-    // 逐个下载
-    if (this.downloadType !== 1) return
-    // zip不需要文件夹分类
+    const needFolder = this.downloadType === 1 || this.downloadType === 3
+    if (!needFolder) return
     if (!this.downloadTypeByFolders) return
 
     // 封装获取和处理文件夹名称的逻辑
@@ -252,6 +256,165 @@ class FileDownloader {
     }
   }
 
+  // 通过 WebSocket 将临时链接转交给外部 Python 程序
+  async sendLinksViaWebSocket() {
+    if (!this.wsEndpoint) {
+      this.emit('warn', $t('error_ws_endpoint_required'))
+      return
+    }
+    if (!this.wsConcurrentDownloads) {
+      this.emit('warn', $t('error_ws_concurrent_required'))
+      return
+    }
+    const [wsError, socket] = await to(this.createWebSocketConnection())
+    if (wsError || !socket) {
+      this.emit('warn', wsError?.message || $t('error_websocket_connection_failed'))
+      return
+    }
+    const jobId = `${Date.now()}_${this.tableId || ''}`
+    try {
+      const configPayload = {
+        type: WEBSOCKET_CONFIG_TYPE,
+        data: {
+          jobId,
+          zipAfterDownload: this.wsZipAfterDownload,
+          zipName: this.zipName,
+          total: this.cellList.length
+        }
+      }
+      const [configError] = await to(this.sendMessageThroughWebSocket(socket, configPayload))
+      if (configError) {
+        this.emit('warn', configError.message || $t('error_websocket_send_failed'))
+        return
+      }
+      const concurrency = this.wsConcurrentDownloads || 5
+      const superTask = new SuperTask(concurrency)
+      const sendErrors = []
+      const sendQueue = []
+      const scheduleSend = (fileInfo) => {
+        if (sendErrors.length) return
+        const sendPromise = (async() => {
+          this.emit('progress', {
+            index: fileInfo.order,
+            name: fileInfo.name,
+            size: fileInfo.size,
+            percentage: 0
+          })
+          const payload = {
+            type: WEBSOCKET_MESSAGE_TYPE,
+            data: {
+              jobId,
+              downloadUrl: fileInfo.fileUrl,
+              name: fileInfo.name,
+              path: fileInfo.path,
+              size: fileInfo.size,
+              token: fileInfo.token,
+              recordId: fileInfo.recordId,
+              fieldId: fileInfo.fieldId,
+              order: fileInfo.order
+            }
+          }
+          const [sendError] = await to(this.sendMessageThroughWebSocket(socket, payload))
+          if (sendError) {
+            sendErrors.push({ error: sendError, order: fileInfo.order })
+            this.emit('error', {
+              message: $t('error_websocket_send_failed'),
+              index: fileInfo.order
+            })
+            throw sendError
+          }
+          this.emit('progress', {
+            index: fileInfo.order,
+            percentage: 100
+          })
+        })()
+        sendQueue.push(sendPromise)
+      }
+      const tasks = this.cellList.map((fileInfo) => {
+        return async() => {
+          if (sendErrors.length) return
+          const [urlErr] = await to(this.getAttachmentUrl(fileInfo))
+          if (urlErr) {
+            sendErrors.push({ error: urlErr, order: fileInfo.order })
+            this.emit('error', {
+              message: urlErr.message,
+              index: fileInfo.order
+            })
+            throw urlErr
+          }
+          scheduleSend(fileInfo)
+        }
+      })
+      superTask.setTasks(tasks)
+      await superTask.finished().catch(() => {})
+      await Promise.allSettled(sendQueue)
+      if (sendErrors.length) {
+        return
+      }
+      const [completeError] = await to(this.sendMessageThroughWebSocket(socket, {
+        type: WEBSOCKET_COMPLETE_TYPE,
+        data: { jobId }
+      }))
+      if (completeError) {
+        this.emit('warn', completeError.message || $t('error_websocket_send_failed'))
+      }
+    } finally {
+      socket.close()
+    }
+  }
+
+  // 创建 WebSocket 实例
+  async createWebSocketConnection() {
+    const WebSocketCtor =
+      typeof window !== 'undefined'
+        ? window.WebSocket
+        : typeof WebSocket !== 'undefined'
+          ? WebSocket
+          : null
+    if (!WebSocketCtor) {
+      throw new Error($t('error_websocket_not_supported'))
+    }
+    return await new Promise((resolve, reject) => {
+      let socket = null
+      try {
+        socket = new WebSocketCtor(this.wsEndpoint)
+      } catch (error) {
+        reject(error)
+        return
+      }
+      const handleError = (event) => {
+        socket?.removeEventListener('open', handleOpen)
+        socket?.removeEventListener('error', handleError)
+        reject(
+          event?.error || new Error($t('error_websocket_connection_failed'))
+        )
+      }
+      const handleOpen = () => {
+        socket.removeEventListener('error', handleError)
+        socket.removeEventListener('open', handleOpen)
+        resolve(socket)
+      }
+      socket.addEventListener('open', handleOpen)
+      socket.addEventListener('error', handleError)
+    })
+  }
+
+  // 发送 WebSocket 消息
+  async sendMessageThroughWebSocket(socket, payload) {
+    return await new Promise((resolve, reject) => {
+      if (!socket || socket.readyState !== WEBSOCKET_OPEN_STATE) {
+        reject(new Error($t('error_websocket_connection_failed')))
+        return
+      }
+      try {
+        socket.send(JSON.stringify(payload))
+        resolve(true)
+      } catch (error) {
+        reject(error)
+      }
+    })
+  }
+
   async downloadFile(fileInfo) {
     const { fileUrl, name, order, size } = fileInfo
     let isDownloadComplete = false // 新增变量，用于跟踪下载是否完成
@@ -313,6 +476,8 @@ class FileDownloader {
     if (this.downloadType === 2) {
       // 逐个下载
       await this.sigleDownLoad()
+    } else if (this.downloadType === 3) {
+      await this.sendLinksViaWebSocket()
     } else {
       await this.zipDownLoad()
     }

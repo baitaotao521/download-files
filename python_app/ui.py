@@ -1,0 +1,259 @@
+"""
+跨平台桌面应用，提供 WebSocket 服务的启动/停止与日志查看。
+"""
+from __future__ import annotations
+
+import logging
+import queue
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from typing import Dict, Optional
+
+from .config import ServerConfig
+from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES
+from .server import WebSocketDownloadServer, configure_logging
+
+
+class GuiLogHandler(logging.Handler):
+  """将日志消息转发到 Tkinter 队列的处理器。"""
+
+  def __init__(self, message_queue: queue.Queue[str]) -> None:
+    """记录队列引用并配置格式。"""
+    super().__init__()
+    self.message_queue = message_queue
+    self.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+
+  def emit(self, record: logging.LogRecord) -> None:
+    """将格式化后的日志写入队列。"""
+    try:
+      message = self.format(record)
+      self.message_queue.put_nowait(message)
+    except Exception:  # noqa: BLE001
+      self.handleError(record)
+
+
+class DownloaderDesktopApp:
+  """桌面程序主体，封装界面与后台服务控制。"""
+
+  def __init__(self) -> None:
+    """初始化 Tk 根窗口、控件、日志管道与本地化。"""
+    configure_logging('INFO')
+    self.localizer = Localizer(DEFAULT_LANGUAGE)
+    self.root = tk.Tk()
+    self.root.minsize(640, 420)
+    self.server: Optional[WebSocketDownloadServer] = None
+    self.log_queue: queue.Queue[str] = queue.Queue()
+    self.log_handler = GuiLogHandler(self.log_queue)
+    logging.getLogger().addHandler(self.log_handler)
+    self.language_label_map: Dict[str, str] = {code: label for label, code in SUPPORTED_LANGUAGES}
+    self.language_code_map: Dict[str, str] = {label: code for label, code in SUPPORTED_LANGUAGES}
+    self._status_state = 'idle'
+    self._status_context: Dict[str, str] = {}
+    self._build_widgets()
+    self._set_language(DEFAULT_LANGUAGE)
+    self._schedule_log_polling()
+
+  def _build_widgets(self) -> None:
+    """创建并布局所有 UI 控件。"""
+    main_frame = ttk.Frame(self.root, padding=12)
+    main_frame.pack(fill=tk.BOTH, expand=True)
+
+    language_frame = ttk.Frame(main_frame, padding=(0, 0, 0, 8))
+    language_frame.pack(fill=tk.X)
+    self.language_label_widget = ttk.Label(language_frame, text='')
+    self.language_label_widget.pack(side=tk.LEFT)
+    default_label = self.language_label_map.get(DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES[0][0])
+    self.language_var = tk.StringVar(value=default_label)
+    self.language_combo = ttk.Combobox(
+      language_frame,
+      state='readonly',
+      textvariable=self.language_var,
+      values=[label for label, _ in SUPPORTED_LANGUAGES],
+      width=18
+    )
+    self.language_combo.pack(side=tk.LEFT, padx=8)
+    self.language_combo.bind('<<ComboboxSelected>>', self._on_language_change)
+
+    self.form_frame = ttk.LabelFrame(main_frame, text='', padding=12)
+    self.form_frame.pack(fill=tk.X, expand=False)
+
+    self.host_label = ttk.Label(self.form_frame, text='')
+    self.host_label.grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
+    self.host_var = tk.StringVar(value='127.0.0.1')
+    ttk.Entry(self.form_frame, textvariable=self.host_var, width=20).grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
+
+    self.port_label = ttk.Label(self.form_frame, text='')
+    self.port_label.grid(row=0, column=2, sticky=tk.W, padx=4, pady=4)
+    self.port_var = tk.StringVar(value='11548')
+    ttk.Entry(self.form_frame, textvariable=self.port_var, width=10).grid(row=0, column=3, sticky=tk.W, padx=4, pady=4)
+
+    self.concurrency_label = ttk.Label(self.form_frame, text='')
+    self.concurrency_label.grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
+    self.concurrency_var = tk.StringVar(value='5')
+    ttk.Entry(self.form_frame, textvariable=self.concurrency_var, width=10).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
+
+    self.output_label = ttk.Label(self.form_frame, text='')
+    self.output_label.grid(row=2, column=0, sticky=tk.W, padx=4, pady=4)
+    self.output_var = tk.StringVar(value='downloads')
+    output_entry = ttk.Entry(self.form_frame, textvariable=self.output_var, width=40)
+    output_entry.grid(row=2, column=1, columnspan=2, sticky=tk.W + tk.E, padx=4, pady=4)
+    self.browse_button = ttk.Button(self.form_frame, text='', command=self._choose_output_dir)
+    self.browse_button.grid(row=2, column=3, sticky=tk.W, padx=4, pady=4)
+
+    self.form_frame.columnconfigure(1, weight=1)
+    self.form_frame.columnconfigure(2, weight=1)
+
+    button_frame = ttk.Frame(main_frame, padding=(0, 12))
+    button_frame.pack(fill=tk.X)
+
+    self.status_var = tk.StringVar(value='Idle')
+    self.status_label = ttk.Label(button_frame, textvariable=self.status_var)
+    self.status_label.pack(side=tk.LEFT)
+
+    self.start_button = ttk.Button(button_frame, text='', command=self._start_server)
+    self.start_button.pack(side=tk.RIGHT, padx=4)
+    self.stop_button = ttk.Button(button_frame, text='', command=self._stop_server)
+    self.stop_button.pack(side=tk.RIGHT, padx=4)
+
+    self.log_frame = ttk.LabelFrame(main_frame, text='', padding=8)
+    self.log_frame.pack(fill=tk.BOTH, expand=True)
+    self.log_text = tk.Text(self.log_frame, state=tk.DISABLED, height=12, wrap=tk.NONE)
+    self.log_text.pack(fill=tk.BOTH, expand=True)
+
+  def _choose_output_dir(self) -> None:
+    """弹出目录选择器并更新输出路径。"""
+    selected = filedialog.askdirectory()
+    if selected:
+      self.output_var.set(selected)
+
+  def _build_config(self) -> ServerConfig:
+    """根据界面输入构造 ServerConfig。"""
+    try:
+      port = int(self.port_var.get())
+    except ValueError as exc:
+      raise ValueError(self._t('msg_invalid_port')) from exc
+    return ServerConfig(
+      host=self.host_var.get().strip() or '127.0.0.1',
+      port=port,
+      output_dir=self.output_var.get().strip() or 'downloads',
+      download_concurrency=self._parse_concurrency()
+    )
+  def _parse_concurrency(self) -> int:
+    """解析并发数配置。"""
+    try:
+      value = int(self.concurrency_var.get())
+    except ValueError as exc:
+      raise ValueError(self._t('msg_invalid_download_concurrency')) from exc
+    if value < 1 or value > 50:
+      raise ValueError(self._t('msg_invalid_download_concurrency'))
+    return value
+
+  def _start_server(self) -> None:
+    """启动 WebSocket 服务并更新状态。"""
+    if self.server and self.server.is_running:
+      messagebox.showinfo(self._t('dialog_info_title'), self._t('msg_server_running'))
+      return
+    try:
+      config = self._build_config()
+    except ValueError as exc:
+      messagebox.showerror(self._t('dialog_error_title'), str(exc))
+      return
+    try:
+      self.server = WebSocketDownloadServer(config)
+      self.server.start()
+      self._set_status('running', host=config.host, port=config.port)
+      logging.info('desktop server started')
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to start desktop server')
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_start_failed', error=str(exc)))
+
+  def _stop_server(self) -> None:
+    """停止 WebSocket 服务并更新状态。"""
+    if not self.server:
+      return
+    try:
+      self.server.stop()
+      self._set_status('stopped')
+      logging.info('desktop server stopped by user')
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to stop desktop server')
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_stop_failed', error=str(exc)))
+
+  def _schedule_log_polling(self) -> None:
+    """启动循环任务，从队列中读取日志到界面。"""
+    self._drain_log_queue()
+    self.root.after(200, self._schedule_log_polling)
+
+  def _drain_log_queue(self) -> None:
+    """将队列中的日志逐条写入文本框。"""
+    while not self.log_queue.empty():
+      message = self.log_queue.get_nowait()
+      self.log_text.configure(state=tk.NORMAL)
+      self.log_text.insert(tk.END, message + '\n')
+      self.log_text.configure(state=tk.DISABLED)
+      self.log_text.see(tk.END)
+
+  def run(self) -> None:
+    """进入 Tkinter 主循环。"""
+    self.root.protocol('WM_DELETE_WINDOW', self._on_close)
+    self.root.mainloop()
+
+  def _on_close(self) -> None:
+    """在窗口关闭时停止服务并销毁 GUI。"""
+    if self.server and self.server.is_running:
+      if not messagebox.askyesno(self._t('dialog_confirm_title'), self._t('msg_exit_running')):
+        return
+      self.server.stop()
+    self.root.destroy()
+
+  def _set_language(self, code: str) -> None:
+    """根据语言代码更新界面文本。"""
+    if code not in self.language_label_map:
+      code = DEFAULT_LANGUAGE
+    self.localizer.set_locale(code)
+    label = self.language_label_map.get(code, list(self.language_label_map.values())[0])
+    if self.language_combo.get() != label:
+      self.language_combo.set(label)
+    self._apply_translations()
+
+  def _on_language_change(self, _event) -> None:
+    """语言选择事件回调。"""
+    label = self.language_combo.get()
+    code = self.language_code_map.get(label, DEFAULT_LANGUAGE)
+    self._set_language(code)
+
+  def _apply_translations(self) -> None:
+    """刷新界面上的多语言文本。"""
+    self.root.title(self._t('title'))
+    self.language_label_widget.config(text=self._t('language_label') + ':')
+    self.form_frame.config(text=self._t('server_config'))
+    self.host_label.config(text=self._t('host') + ':')
+    self.port_label.config(text=self._t('port') + ':')
+    self.concurrency_label.config(text=self._t('download_concurrency') + ':')
+    self.output_label.config(text=self._t('output_dir') + ':')
+    self.browse_button.config(text=self._t('browse'))
+    self.start_button.config(text=self._t('btn_start'))
+    self.stop_button.config(text=self._t('btn_stop'))
+    self.log_frame.config(text=self._t('logs'))
+    self._refresh_status_text()
+
+  def _refresh_status_text(self) -> None:
+    """根据当前状态刷新状态栏文本。"""
+    key = f'status_{self._status_state}'
+    self.status_var.set(self._t(key, **self._status_context))
+
+  def _set_status(self, state: str, **context) -> None:
+    """记录状态并更新状态栏。"""
+    self._status_state = state
+    self._status_context = context
+    self._refresh_status_text()
+
+  def _t(self, key: str, **kwargs) -> str:
+    """封装本地化翻译调用。"""
+    return self.localizer.translate(key, **kwargs)
+
+
+def launch_desktop_app() -> None:
+  """启动桌面程序入口。"""
+  app = DownloaderDesktopApp()
+  app.run()

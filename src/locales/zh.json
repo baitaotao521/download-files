@@ -33,6 +33,7 @@
   "select_from_table_fields": "从表字段选择",
   "download_individual_files": "逐个文件下载",
   "zip_download": "zip打包下载",
+  "ws_download": "WebSocket推送下载",
   "yes": "是",
   "no": "否",
   "select_first_directory": "请选择一级目录",
@@ -77,7 +78,23 @@
   "text23":"仅显示失败文件",
   "text24":"并发下载数",
   "text25":"同时下载的文件数量，增加可加快下载速度，但可能影响浏览器性能",
+  "ws_endpoint_label": "WebSocket服务地址",
+  "ws_endpoint_hint": "插件会将临时下载链接推送到该WebSocket服务，由Python程序完成下载。",
+  "ws_endpoint_placeholder": "请输入ws://或wss://地址",
+  "ws_concurrent_downloads": "WebSocket并发数",
+  "ws_concurrent_downloads_hint": "控制Python客户端同时下载的文件数量，数值越大速度越快但也更耗资源。",
+  "ws_zip_option": "是否打包下载",
+  "ws_zip_option_hint": "开启后，Python客户端会在全部文件下载完成后生成一个ZIP文件再交付。",
+  "ws_zip_option_on": "打包",
+  "ws_zip_option_off": "不打包",
   "error_concurrent_downloads_required":"请输入并发下载数",
-  "error_concurrent_downloads_range":"并发下载数必须在1到20之间"
+  "error_concurrent_downloads_range":"并发下载数必须在1到20之间",
+  "error_ws_endpoint_required": "请输入WebSocket服务地址",
+  "error_ws_endpoint_invalid": "请输入合法的ws://或wss://地址",
+  "error_ws_concurrent_required": "请输入WebSocket并发数",
+  "error_ws_concurrent_range": "WebSocket并发数必须在1到30之间",
+  "error_websocket_not_supported": "当前环境不支持WebSocket，请切换其他下载方式。",
+  "error_websocket_connection_failed": "无法连接WebSocket服务，请确认地址与Python程序状态。",
+  "error_websocket_send_failed": "发送下载链接到WebSocket失败，请检查服务日志。"
 
 }

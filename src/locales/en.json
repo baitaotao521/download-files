@@ -33,6 +33,7 @@
   "select_from_table_fields": "Select from Table Fields",
   "download_individual_files": "Download Individual Files",
   "zip_download": "Zip Download",
+  "ws_download": "Send Links via WebSocket",
   "yes": "Yes",
   "no": "No",
   "select_first_directory": "Select First Directory",
@@ -76,6 +77,22 @@
   "text24": "Concurrent Downloads",
   "text25": "Number of files to download simultaneously. Increasing this can speed up downloads but may affect browser performance",
   "error_concurrent_downloads_required": "Please enter the number of concurrent downloads",
-  "error_concurrent_downloads_range": "Concurrent downloads must be between 1 and 20"
+  "error_concurrent_downloads_range": "Concurrent downloads must be between 1 and 20",
+  "ws_endpoint_label": "WebSocket Endpoint",
+  "ws_endpoint_hint": "Temporary Feishu download links will be pushed to this WebSocket endpoint for your Python program to handle.",
+  "ws_endpoint_placeholder": "Enter ws:// or wss:// endpoint",
+  "ws_concurrent_downloads": "WebSocket Concurrency",
+  "ws_concurrent_downloads_hint": "Controls how many files the Python client downloads concurrently. Higher values speed up downloads but use more resources.",
+  "ws_zip_option": "Archive After Download",
+  "ws_zip_option_hint": "When enabled, the Python client will create a ZIP archive after all files finish downloading.",
+  "ws_zip_option_on": "Zip Enabled",
+  "ws_zip_option_off": "No Zip",
+  "error_ws_endpoint_required": "Enter a WebSocket endpoint",
+  "error_ws_endpoint_invalid": "Please provide a valid ws:// or wss:// endpoint",
+  "error_ws_concurrent_required": "Enter the WebSocket concurrency",
+  "error_ws_concurrent_range": "WebSocket concurrency must be between 1 and 30",
+  "error_websocket_not_supported": "WebSocket is not supported in this environment. Please choose another download method.",
+  "error_websocket_connection_failed": "Unable to connect to the WebSocket endpoint. Check the address and Python program status.",
+  "error_websocket_send_failed": "Failed to send download links to the WebSocket endpoint. Please review the server logs."
 
 }
