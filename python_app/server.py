@@ -208,7 +208,14 @@ class AttachmentDownloader:
     self.output_dir = config.ensure_output_dir()
     self.default_concurrency = config.normalized_concurrency()
     self.monitor = monitor
-
+  
+  def update_output_dir(self, new_dir: Path) -> Path:
+    """更新基础保存目录，确保新路径立即生效。"""
+    self.config.output_dir = Path(new_dir)
+    self.output_dir = self.config.ensure_output_dir()
+    logging.info('output directory switched to %s', self.output_dir)
+    return self.output_dir
+ 
   async def handle_connection(self, websocket, path=None) -> None:
     """处理单个客户端连接，并监听其消息流。"""
     peer = getattr(websocket, 'remote_address', ('unknown', ''))
@@ -382,6 +389,7 @@ class WebSocketDownloadServer:
     self._thread: Optional[threading.Thread] = None
     self._stop_event: Optional[asyncio.Event] = None
     self._task: Optional[asyncio.Task] = None
+    self._downloader: Optional[AttachmentDownloader] = None
 
   @property
   def is_running(self) -> bool:
@@ -399,6 +407,7 @@ class WebSocketDownloadServer:
       asyncio.set_event_loop(self._loop)
       self._stop_event = asyncio.Event()
       downloader = AttachmentDownloader(self.config, monitor=self.monitor)
+      self._downloader = downloader
       server_coro = self._serve_until_stopped(downloader, self._stop_event)
       self._task = self._loop.create_task(server_coro)
       try:
@@ -410,7 +419,8 @@ class WebSocketDownloadServer:
         with contextlib.suppress(Exception):
           self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         self._loop.close()
-
+        self._downloader = None
+ 
     self._thread = threading.Thread(target=runner, daemon=True)
     self._thread.start()
 
@@ -437,3 +447,21 @@ class WebSocketDownloadServer:
     """在事件循环中设置停止事件。"""
     if self._stop_event and not self._stop_event.is_set():
       self._stop_event.set()
+
+  def update_output_dir(self, new_dir: str | Path) -> Path:
+    """更新当前运行服务的保存目录，必要时通知下载器。"""
+    if not new_dir:
+      raise ValueError('output directory cannot be empty')
+    self.config.output_dir = Path(new_dir)
+    normalized = self.config.ensure_output_dir()
+    if not self.is_running or not self._loop or not self._downloader:
+      return normalized
+
+    async def _apply_update() -> Path:
+      """在事件循环中调用下载器更新目录。"""
+      if not self._downloader:
+        return normalized
+      return self._downloader.update_output_dir(normalized)
+
+    future = asyncio.run_coroutine_threadsafe(_apply_update(), self._loop)
+    return future.result(timeout=5)

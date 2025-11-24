@@ -39,6 +39,7 @@ TRANSLATIONS = {
     'msg_invalid_port': '端口必须为整数。',
     'msg_start_failed': '启动失败：{error}',
     'msg_stop_failed': '停止失败：{error}',
+    'msg_output_dir_failed': '更新保存目录失败：{error}',
     'msg_exit_running': '服务仍在运行，确定停止并退出吗？',
     'language_option_zh': '简体中文',
     'language_option_en': 'English'
@@ -78,6 +79,7 @@ TRANSLATIONS = {
     'msg_invalid_port': 'Port must be an integer.',
     'msg_start_failed': 'Failed to start: {error}',
     'msg_stop_failed': 'Failed to stop: {error}',
+    'msg_output_dir_failed': 'Failed to update output directory: {error}',
     'msg_exit_running': 'Server is running. Stop and exit?',
     'language_option_zh': '简体中文',
     'language_option_en': 'English',
@@ -118,6 +120,7 @@ TRANSLATIONS = {
     'msg_invalid_port': 'ポートは整数で入力してください。',
     'msg_start_failed': '起動に失敗しました：{error}',
     'msg_stop_failed': '停止に失敗しました：{error}',
+    'msg_output_dir_failed': '保存先の更新に失敗しました: {error}',
     'msg_exit_running': 'サービスが稼働中です。停止して終了しますか？',
     'language_option_zh': '简体中文',
     'language_option_en': 'English',

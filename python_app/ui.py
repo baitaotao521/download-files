@@ -87,6 +87,8 @@ class DownloaderDesktopApp:
     self.output_var = tk.StringVar(value='downloads')
     output_entry = ttk.Entry(self.form_frame, textvariable=self.output_var, width=40)
     output_entry.grid(row=0, column=1, columnspan=2, sticky=tk.W + tk.E, padx=4, pady=4)
+    output_entry.bind('<FocusOut>', self._on_output_dir_commit)
+    output_entry.bind('<Return>', self._on_output_dir_commit)
     self.browse_button = ttk.Button(self.form_frame, text='', command=self._choose_output_dir)
     self.browse_button.grid(row=0, column=3, sticky=tk.W, padx=4, pady=4)
     self.form_frame.columnconfigure(1, weight=1)
@@ -148,6 +150,28 @@ class DownloaderDesktopApp:
     selected = filedialog.askdirectory()
     if selected:
       self.output_var.set(selected)
+      self._apply_output_dir_change()
+  
+  def _on_output_dir_commit(self, _event=None) -> None:
+    """处理输入框失焦或回车事件，应用新的目录。"""
+    self._apply_output_dir_change()
+  
+  def _apply_output_dir_change(self) -> None:
+    """将最新的保存目录同步到运行中的服务。"""
+    if not self.server or not self.server.is_running:
+      return
+    new_dir = self.output_var.get().strip()
+    if not new_dir:
+      return
+    try:
+      updated = self.server.update_output_dir(new_dir)
+      logging.info('output directory updated to %s', updated)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to update output directory')
+      messagebox.showerror(
+        self._t('dialog_error_title'),
+        self._t('msg_output_dir_failed', error=str(exc))
+      )
 
   def _toggle_advanced(self) -> None:
     """切换高级设置面板可见性。"""
