@@ -225,6 +225,8 @@ class DownloaderDesktopApp:
       port = int(self.port_var.get())
     except ValueError as exc:
       raise ValueError(self._t('msg_invalid_port')) from exc
+    if not 1 <= port <= 65535:
+      raise ValueError(self._t('msg_invalid_port'))
     return ServerConfig(
       host=self.host_var.get().strip() or '127.0.0.1',
       port=port,
