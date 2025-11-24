@@ -57,6 +57,7 @@ class DownloaderDesktopApp:
     self._set_language(DEFAULT_LANGUAGE)
     self._schedule_log_polling()
     self._schedule_stats_refresh()
+    self._start_server(auto=True)
 
   def _build_widgets(self) -> None:
     """创建并布局所有 UI 控件。"""
@@ -207,15 +208,17 @@ class DownloaderDesktopApp:
       download_concurrency=DEFAULT_PYTHON_CONCURRENCY
     )
 
-  def _start_server(self) -> None:
+  def _start_server(self, auto: bool = False) -> None:
     """启动 WebSocket 服务并更新状态。"""
     if self.server and self.server.is_running:
-      messagebox.showinfo(self._t('dialog_info_title'), self._t('msg_server_running'))
+      if not auto:
+        messagebox.showinfo(self._t('dialog_info_title'), self._t('msg_server_running'))
       return
     try:
       config = self._build_config()
     except ValueError as exc:
-      messagebox.showerror(self._t('dialog_error_title'), str(exc))
+      if not auto:
+        messagebox.showerror(self._t('dialog_error_title'), str(exc))
       return
     try:
       self.server = WebSocketDownloadServer(config, monitor=self.monitor)
@@ -224,7 +227,8 @@ class DownloaderDesktopApp:
       logging.info('desktop server started')
     except Exception as exc:  # noqa: BLE001
       logging.exception('failed to start desktop server')
-      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_start_failed', error=str(exc)))
+      if not auto:
+        messagebox.showerror(self._t('dialog_error_title'), self._t('msg_start_failed', error=str(exc)))
 
   def _stop_server(self) -> None:
     """停止 WebSocket 服务并更新状态。"""

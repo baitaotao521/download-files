@@ -80,13 +80,55 @@ TRANSLATIONS = {
     'msg_stop_failed': 'Failed to stop: {error}',
     'msg_exit_running': 'Server is running. Stop and exit?',
     'language_option_zh': '简体中文',
-    'language_option_en': 'English'
+    'language_option_en': 'English',
+    'language_option_ja': '日本語'
+  },
+  'ja': {
+    'title': 'Feishu 添付ファイルダウンローダー',
+    'language_label': '言語',
+    'server_config': 'サービス設定',
+    'stats_title': 'ダウンロード状況',
+    'host': 'ホスト',
+    'port': 'ポート',
+    'output_dir': '保存先',
+    'browse': '選択…',
+    'advanced_settings': '詳細設定',
+    'advanced_settings_desc': 'ローカルクライアントのホスト/ポートを変更する場合は展開して設定してください。',
+    'advanced_toggle_show': '詳細設定を表示',
+    'advanced_toggle_hide': '詳細設定を隠す',
+    'btn_show_logs': 'ログを表示',
+    'btn_hide_logs': 'ログを隠す',
+    'stat_connection_connected': '接続状態：接続中',
+    'stat_connection_disconnected': '接続状態：未接続',
+    'stat_current': 'ダウンロード中：{count}',
+    'stat_completed': '完了：{count}',
+    'stat_pending': '残り：{count}',
+    'download_concurrency': 'Python ダウンロード並列数',
+    'msg_invalid_download_concurrency': 'Python の並列数は 1〜50 の範囲で設定してください。',
+    'btn_start': 'サービス開始',
+    'btn_stop': 'サービス停止',
+    'logs': 'ログ',
+    'status_idle': 'ステータス：待機',
+    'status_running': 'ステータス：稼働中 ws://{host}:{port}',
+    'status_stopped': 'ステータス：停止',
+    'dialog_info_title': '情報',
+    'dialog_error_title': 'エラー',
+    'dialog_confirm_title': '確認',
+    'msg_server_running': 'サービスは既に稼働中です。',
+    'msg_invalid_port': 'ポートは整数で入力してください。',
+    'msg_start_failed': '起動に失敗しました：{error}',
+    'msg_stop_failed': '停止に失敗しました：{error}',
+    'msg_exit_running': 'サービスが稼働中です。停止して終了しますか？',
+    'language_option_zh': '简体中文',
+    'language_option_en': 'English',
+    'language_option_ja': '日本語'
   }
 }
 
 SUPPORTED_LANGUAGES = [
   ('简体中文', 'zh'),
-  ('English', 'en')
+  ('English', 'en'),
+  ('日本語', 'ja')
 ]
 
 DEFAULT_LANGUAGE = 'zh'
