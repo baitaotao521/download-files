@@ -283,35 +283,41 @@ class FileDownloader {
           total: this.cellList.length
         }
       })
-      for (const fileInfo of this.cellList) {
-        const { order } = fileInfo
-        try {
-          await this.getAttachmentUrl(fileInfo)
-          this.emit('progress', {
-            index: order,
-            name: fileInfo.name,
-            size: fileInfo.size,
-            percentage: 0
-          })
-          this._sendWebSocketMessage(socket, {
-            type: WEBSOCKET_LINK_TYPE,
-            data: {
-              downloadUrl: fileInfo.fileUrl,
+      // 并行预取附件链接，避免串行等待造成阻塞
+      const superTask = new SuperTask(concurrency)
+      const tasks = this.cellList.map((fileInfo) => {
+        return async() => {
+          const { order } = fileInfo
+          try {
+            await this.getAttachmentUrl(fileInfo)
+            this.emit('progress', {
+              index: order,
               name: fileInfo.name,
-              path: fileInfo.path,
-              order: fileInfo.order,
-              size: fileInfo.size
-            }
-          })
-        } catch (error) {
-          const message = error?.message || $t('file_download_failed')
-          this.emit('error', {
-            index: order,
-            message
-          })
-          continue
+              size: fileInfo.size,
+              percentage: 0
+            })
+            this._sendWebSocketMessage(socket, {
+              type: WEBSOCKET_LINK_TYPE,
+              data: {
+                downloadUrl: fileInfo.fileUrl,
+                name: fileInfo.name,
+                path: fileInfo.path,
+                order: fileInfo.order,
+                size: fileInfo.size
+              }
+            })
+          } catch (error) {
+            const message = error?.message || $t('file_download_failed')
+            this.emit('error', {
+              index: order,
+              message
+            })
+            throw error
+          }
         }
-      }
+      })
+      superTask.setTasks(tasks)
+      await superTask.finished().catch(() => {})
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_COMPLETE_TYPE,
         data: {
