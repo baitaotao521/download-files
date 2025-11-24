@@ -17,6 +17,7 @@ import aiohttp
 import websockets
 
 from .config import ServerConfig
+from .monitor import DownloadMonitor
 
 WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
@@ -72,6 +73,7 @@ class DownloadJobState:
     self.job_dir = self.handler._create_job_directory(self.job_name, self.job_id)
     self.total = max(total, 0)
     self.configured = True
+    self.handler._monitor_job_started(self.total)
     logging.info('job configured: job_id=%s concurrent=%s zip=%s', self.job_id, concurrent, zip_after)
     return True
 
@@ -112,16 +114,19 @@ class DownloadJobState:
       extra={'stage': 'job_complete', 'jobId': self.job_id}
     )
     self.completed = True
+    self.handler._monitor_job_finished()
 
   async def shutdown(self) -> None:
     """在连接异常结束时取消挂起任务。"""
     if not self.tasks:
+      self.handler._monitor_job_finished()
       return
     tasks = list(self.tasks)
     self.tasks.clear()
     for task in tasks:
       task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    self.handler._monitor_job_finished()
 
   async def _download_worker(self, file_info: Dict[str, Any], websocket) -> None:
     """受限的下载任务，负责单个文件处理。"""
@@ -138,8 +143,12 @@ class DownloadJobState:
           order=order
         )
         return
+      success = False
+      self.handler._monitor_download_started()
       try:
         target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
+        saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
+        success = True
       except ValueError as exc:
         await self.handler._send_ack(
           websocket,
@@ -148,8 +157,6 @@ class DownloadJobState:
           order=order
         )
         return
-      try:
-        saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
       except Exception as exc:  # noqa: BLE001
         logging.exception('download failed for %s', file_name)
         await self.handler._send_ack(
@@ -159,6 +166,8 @@ class DownloadJobState:
           order=order
         )
         return
+      finally:
+        self.handler._monitor_download_finished(success=success)
       await self.handler._send_ack(
         websocket,
         status='success',
@@ -193,16 +202,18 @@ def configure_logging(level: str) -> None:
 class AttachmentDownloader:
   """处理 WebSocket 消息并负责飞书附件下载。"""
 
-  def __init__(self, config: ServerConfig) -> None:
+  def __init__(self, config: ServerConfig, monitor: Optional[DownloadMonitor] = None) -> None:
     """记录输出目录并保存默认配置。"""
     self.config = config
     self.output_dir = config.ensure_output_dir()
     self.default_concurrency = config.normalized_concurrency()
+    self.monitor = monitor
 
   async def handle_connection(self, websocket, path=None) -> None:
     """处理单个客户端连接，并监听其消息流。"""
     peer = getattr(websocket, 'remote_address', ('unknown', ''))
     logging.info('client connected %s:%s', peer[0], peer[1])
+    self._monitor_connection(True)
     async with aiohttp.ClientSession() as session:
       job_state = DownloadJobState(self, session)
       try:
@@ -214,6 +225,7 @@ class AttachmentDownloader:
         logging.warning('connection closed with error: %s', exc)
       finally:
         await job_state.shutdown()
+        self._monitor_connection(False)
 
   async def _process_message(self, message: str, websocket, job_state: DownloadJobState) -> None:
     """解析前端消息并调度下载流程。"""
@@ -320,10 +332,35 @@ class AttachmentDownloader:
     except Exception as exc:  # noqa: BLE001
       logging.warning('failed to send ack: %s', exc)
 
+  def _monitor_connection(self, connected: bool) -> None:
+    """更新连接状态供桌面端展示。"""
+    if self.monitor:
+      self.monitor.set_connection(connected)
 
-async def run_server_forever(config: ServerConfig) -> None:
+  def _monitor_job_started(self, total: int) -> None:
+    """记录新的下载任务。"""
+    if self.monitor:
+      self.monitor.start_job(total)
+
+  def _monitor_download_started(self) -> None:
+    """记录单个文件开始下载。"""
+    if self.monitor:
+      self.monitor.start_download()
+
+  def _monitor_download_finished(self, *, success: bool) -> None:
+    """记录单个文件完成。"""
+    if self.monitor:
+      self.monitor.finish_download(success)
+
+  def _monitor_job_finished(self) -> None:
+    """通知任务阶段结束。"""
+    if self.monitor:
+      self.monitor.job_finished()
+
+
+async def run_server_forever(config: ServerConfig, monitor: Optional[DownloadMonitor] = None) -> None:
   """以 CLI 方式运行 WebSocket 服务，直到用户终止。"""
-  downloader = AttachmentDownloader(config)
+  downloader = AttachmentDownloader(config, monitor=monitor)
   logging.info('starting CLI server at ws://%s:%s', config.host, config.port)
   try:
     async with websockets.serve(downloader.handle_connection, config.host, config.port):
@@ -337,9 +374,10 @@ async def run_server_forever(config: ServerConfig) -> None:
 class WebSocketDownloadServer:
   """在桌面应用中托管 WebSocket 服务的封装类。"""
 
-  def __init__(self, config: ServerConfig) -> None:
+  def __init__(self, config: ServerConfig, monitor: Optional[DownloadMonitor] = None) -> None:
     """记录配置并初始化内部状态。"""
     self.config = config
+    self.monitor = monitor
     self._loop: Optional[asyncio.AbstractEventLoop] = None
     self._thread: Optional[threading.Thread] = None
     self._stop_event: Optional[asyncio.Event] = None
@@ -360,7 +398,7 @@ class WebSocketDownloadServer:
       self._loop = asyncio.new_event_loop()
       asyncio.set_event_loop(self._loop)
       self._stop_event = asyncio.Event()
-      downloader = AttachmentDownloader(self.config)
+      downloader = AttachmentDownloader(self.config, monitor=self.monitor)
       server_coro = self._serve_until_stopped(downloader, self._stop_event)
       self._task = self._loop.create_task(server_coro)
       try:

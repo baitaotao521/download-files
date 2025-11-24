@@ -11,7 +11,10 @@ from typing import Dict, Optional
 
 from .config import ServerConfig
 from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES
+from .monitor import DownloadMonitor
 from .server import WebSocketDownloadServer, configure_logging
+
+DEFAULT_PYTHON_CONCURRENCY = 5
 
 
 class GuiLogHandler(logging.Handler):
@@ -42,6 +45,7 @@ class DownloaderDesktopApp:
     self.root = tk.Tk()
     self.root.minsize(640, 420)
     self.server: Optional[WebSocketDownloadServer] = None
+    self.monitor = DownloadMonitor()
     self.log_queue: queue.Queue[str] = queue.Queue()
     self.log_handler = GuiLogHandler(self.log_queue)
     logging.getLogger().addHandler(self.log_handler)
@@ -52,6 +56,7 @@ class DownloaderDesktopApp:
     self._build_widgets()
     self._set_language(DEFAULT_LANGUAGE)
     self._schedule_log_polling()
+    self._schedule_stats_refresh()
 
   def _build_widgets(self) -> None:
     """创建并布局所有 UI 控件。"""
@@ -76,32 +81,45 @@ class DownloaderDesktopApp:
 
     self.form_frame = ttk.LabelFrame(main_frame, text='', padding=12)
     self.form_frame.pack(fill=tk.X, expand=False)
-
-    self.host_label = ttk.Label(self.form_frame, text='')
-    self.host_label.grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
-    self.host_var = tk.StringVar(value='127.0.0.1')
-    ttk.Entry(self.form_frame, textvariable=self.host_var, width=20).grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
-
-    self.port_label = ttk.Label(self.form_frame, text='')
-    self.port_label.grid(row=0, column=2, sticky=tk.W, padx=4, pady=4)
-    self.port_var = tk.StringVar(value='11548')
-    ttk.Entry(self.form_frame, textvariable=self.port_var, width=10).grid(row=0, column=3, sticky=tk.W, padx=4, pady=4)
-
-    self.concurrency_label = ttk.Label(self.form_frame, text='')
-    self.concurrency_label.grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
-    self.concurrency_var = tk.StringVar(value='5')
-    ttk.Entry(self.form_frame, textvariable=self.concurrency_var, width=10).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
-
     self.output_label = ttk.Label(self.form_frame, text='')
-    self.output_label.grid(row=2, column=0, sticky=tk.W, padx=4, pady=4)
+    self.output_label.grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
     self.output_var = tk.StringVar(value='downloads')
     output_entry = ttk.Entry(self.form_frame, textvariable=self.output_var, width=40)
-    output_entry.grid(row=2, column=1, columnspan=2, sticky=tk.W + tk.E, padx=4, pady=4)
+    output_entry.grid(row=0, column=1, columnspan=2, sticky=tk.W + tk.E, padx=4, pady=4)
     self.browse_button = ttk.Button(self.form_frame, text='', command=self._choose_output_dir)
-    self.browse_button.grid(row=2, column=3, sticky=tk.W, padx=4, pady=4)
-
+    self.browse_button.grid(row=0, column=3, sticky=tk.W, padx=4, pady=4)
     self.form_frame.columnconfigure(1, weight=1)
     self.form_frame.columnconfigure(2, weight=1)
+
+    self.stats_frame = ttk.LabelFrame(main_frame, text='', padding=12)
+    self.stats_frame.pack(fill=tk.X, expand=False, pady=(8, 0))
+    self.connection_var = tk.StringVar(value='')
+    self.current_var = tk.StringVar(value='0')
+    self.completed_var = tk.StringVar(value='0')
+    self.pending_var = tk.StringVar(value='0')
+    ttk.Label(self.stats_frame, textvariable=self.connection_var).grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.current_var).grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.completed_var).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.pending_var).grid(row=1, column=2, sticky=tk.W, padx=4, pady=4)
+    self.stats_frame.columnconfigure(0, weight=1)
+    self.stats_frame.columnconfigure(1, weight=1)
+    self.stats_frame.columnconfigure(2, weight=1)
+
+    self.advanced_visible = False
+    self.advanced_button = ttk.Button(main_frame, text='', command=self._toggle_advanced)
+    self.advanced_button.pack(fill=tk.X, pady=(8, 0))
+    self.advanced_frame = ttk.LabelFrame(main_frame, text='', padding=12)
+    self.host_label = ttk.Label(self.advanced_frame, text='')
+    self.host_label.grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
+    self.host_var = tk.StringVar(value='127.0.0.1')
+    ttk.Entry(self.advanced_frame, textvariable=self.host_var, width=20).grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
+    self.port_label = ttk.Label(self.advanced_frame, text='')
+    self.port_label.grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
+    self.port_var = tk.StringVar(value='11548')
+    ttk.Entry(self.advanced_frame, textvariable=self.port_var, width=10).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
+    self.advanced_tip = ttk.Label(self.advanced_frame, text='', wraplength=360)
+    self.advanced_tip.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 0))
+    self.advanced_frame.columnconfigure(1, weight=1)
 
     button_frame = ttk.Frame(main_frame, padding=(0, 12))
     button_frame.pack(fill=tk.X)
@@ -110,21 +128,71 @@ class DownloaderDesktopApp:
     self.status_label = ttk.Label(button_frame, textvariable=self.status_var)
     self.status_label.pack(side=tk.LEFT)
 
+    self.log_visible = False
+    self.log_toggle_button = ttk.Button(button_frame, text='', command=self._toggle_logs)
+    self.log_toggle_button.pack(side=tk.RIGHT, padx=4)
     self.start_button = ttk.Button(button_frame, text='', command=self._start_server)
     self.start_button.pack(side=tk.RIGHT, padx=4)
     self.stop_button = ttk.Button(button_frame, text='', command=self._stop_server)
     self.stop_button.pack(side=tk.RIGHT, padx=4)
 
     self.log_frame = ttk.LabelFrame(main_frame, text='', padding=8)
-    self.log_frame.pack(fill=tk.BOTH, expand=True)
     self.log_text = tk.Text(self.log_frame, state=tk.DISABLED, height=12, wrap=tk.NONE)
     self.log_text.pack(fill=tk.BOTH, expand=True)
+    self._update_advanced_visibility()
+    self._update_log_visibility()
 
   def _choose_output_dir(self) -> None:
     """弹出目录选择器并更新输出路径。"""
     selected = filedialog.askdirectory()
     if selected:
       self.output_var.set(selected)
+
+  def _toggle_advanced(self) -> None:
+    """切换高级设置面板可见性。"""
+    self.advanced_visible = not self.advanced_visible
+    self._update_advanced_visibility()
+
+  def _update_advanced_visibility(self) -> None:
+    """根据状态显示/隐藏高级设置。"""
+    if self.advanced_visible:
+      self.advanced_frame.pack(fill=tk.X, expand=False, pady=(0, 8))
+      button_text = self._t('advanced_toggle_hide')
+    else:
+      self.advanced_frame.pack_forget()
+      button_text = self._t('advanced_toggle_show')
+    self.advanced_button.config(text=button_text)
+    self.advanced_frame.config(text=self._t('advanced_settings'))
+    self.advanced_tip.config(text=self._t('advanced_settings_desc'))
+
+  def _toggle_logs(self) -> None:
+    """切换日志面板显示。"""
+    self.log_visible = not self.log_visible
+    self._update_log_visibility()
+
+  def _update_log_visibility(self) -> None:
+    """根据状态显示/隐藏日志区。"""
+    if self.log_visible:
+      self.log_frame.pack(fill=tk.BOTH, expand=True)
+      button_text = self._t('btn_hide_logs')
+    else:
+      self.log_frame.pack_forget()
+      button_text = self._t('btn_show_logs')
+    self.log_toggle_button.config(text=button_text)
+
+  def _schedule_stats_refresh(self) -> None:
+    """定时更新统计信息。"""
+    self._refresh_stats()
+    self.root.after(500, self._schedule_stats_refresh)
+
+  def _refresh_stats(self) -> None:
+    """将下载统计渲染到界面。"""
+    snapshot = self.monitor.snapshot()
+    connection_key = 'stat_connection_connected' if snapshot['connected'] else 'stat_connection_disconnected'
+    self.connection_var.set(self._t(connection_key))
+    self.current_var.set(self._t('stat_current', count=snapshot['active']))
+    self.completed_var.set(self._t('stat_completed', count=snapshot['completed']))
+    self.pending_var.set(self._t('stat_pending', count=snapshot['pending']))
 
   def _build_config(self) -> ServerConfig:
     """根据界面输入构造 ServerConfig。"""
@@ -136,17 +204,8 @@ class DownloaderDesktopApp:
       host=self.host_var.get().strip() or '127.0.0.1',
       port=port,
       output_dir=self.output_var.get().strip() or 'downloads',
-      download_concurrency=self._parse_concurrency()
+      download_concurrency=DEFAULT_PYTHON_CONCURRENCY
     )
-  def _parse_concurrency(self) -> int:
-    """解析并发数配置。"""
-    try:
-      value = int(self.concurrency_var.get())
-    except ValueError as exc:
-      raise ValueError(self._t('msg_invalid_download_concurrency')) from exc
-    if value < 1 or value > 50:
-      raise ValueError(self._t('msg_invalid_download_concurrency'))
-    return value
 
   def _start_server(self) -> None:
     """启动 WebSocket 服务并更新状态。"""
@@ -159,7 +218,7 @@ class DownloaderDesktopApp:
       messagebox.showerror(self._t('dialog_error_title'), str(exc))
       return
     try:
-      self.server = WebSocketDownloadServer(config)
+      self.server = WebSocketDownloadServer(config, monitor=self.monitor)
       self.server.start()
       self._set_status('running', host=config.host, port=config.port)
       logging.info('desktop server started')
@@ -227,14 +286,19 @@ class DownloaderDesktopApp:
     self.root.title(self._t('title'))
     self.language_label_widget.config(text=self._t('language_label') + ':')
     self.form_frame.config(text=self._t('server_config'))
+    self.stats_frame.config(text=self._t('stats_title'))
     self.host_label.config(text=self._t('host') + ':')
     self.port_label.config(text=self._t('port') + ':')
-    self.concurrency_label.config(text=self._t('download_concurrency') + ':')
     self.output_label.config(text=self._t('output_dir') + ':')
     self.browse_button.config(text=self._t('browse'))
     self.start_button.config(text=self._t('btn_start'))
     self.stop_button.config(text=self._t('btn_stop'))
     self.log_frame.config(text=self._t('logs'))
+    self.advanced_frame.config(text=self._t('advanced_settings'))
+    self.advanced_tip.config(text=self._t('advanced_settings_desc'))
+    self._update_advanced_visibility()
+    self._update_log_visibility()
+    self._refresh_stats()
     self._refresh_status_text()
 
   def _refresh_status_text(self) -> None:

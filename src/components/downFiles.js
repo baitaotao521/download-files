@@ -270,11 +270,12 @@ class FileDownloader {
     const socket = await this._createWebSocket(wsUrl)
     const completion = this._bindWebSocketLifecycle(socket)
     const jobId = `${Date.now()}`
+    const concurrency = Math.max(1, Number(this.concurrentDownloads) || 5)
     try {
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_CONFIG_TYPE,
         data: {
-          concurrent: Number(this.concurrentDownloads) || 5,
+          concurrent: concurrency,
           zipAfterDownload: this.downloadType === 1,
           jobId,
           jobName: this.zipName || jobId,
@@ -283,23 +284,33 @@ class FileDownloader {
         }
       })
       for (const fileInfo of this.cellList) {
-        await this.getAttachmentUrl(fileInfo)
-        this.emit('progress', {
-          index: fileInfo.order,
-          name: fileInfo.name,
-          size: fileInfo.size,
-          percentage: 0
-        })
-        this._sendWebSocketMessage(socket, {
-          type: WEBSOCKET_LINK_TYPE,
-          data: {
-            downloadUrl: fileInfo.fileUrl,
+        const { order } = fileInfo
+        try {
+          await this.getAttachmentUrl(fileInfo)
+          this.emit('progress', {
+            index: order,
             name: fileInfo.name,
-            path: fileInfo.path,
-            order: fileInfo.order,
-            size: fileInfo.size
-          }
-        })
+            size: fileInfo.size,
+            percentage: 0
+          })
+          this._sendWebSocketMessage(socket, {
+            type: WEBSOCKET_LINK_TYPE,
+            data: {
+              downloadUrl: fileInfo.fileUrl,
+              name: fileInfo.name,
+              path: fileInfo.path,
+              order: fileInfo.order,
+              size: fileInfo.size
+            }
+          })
+        } catch (error) {
+          const message = error?.message || $t('file_download_failed')
+          this.emit('error', {
+            index: order,
+            message
+          })
+          continue
+        }
       }
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_COMPLETE_TYPE,

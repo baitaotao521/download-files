@@ -185,30 +185,6 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item
-        v-if="formData.downloadChannel === 'websocket'"
-        :label="$t('websocket_host')"
-        prop="wsHost"
-      >
-        <el-input
-          v-model="formData.wsHost"
-          :placeholder="$t('websocket_host_placeholder')"
-        />
-      </el-form-item>
-      <el-form-item
-        v-if="formData.downloadChannel === 'websocket'"
-        :label="$t('websocket_port')"
-        prop="wsPort"
-      >
-        <el-input-number
-          v-model="formData.wsPort"
-          :min="1"
-          :max="65535"
-          :placeholder="$t('websocket_port_placeholder')"
-          style="width: 100%"
-        />
-      </el-form-item>
-
       <el-form-item :label="$t('download_method')" prop="downloadType">
         <el-select
           v-model="formData.downloadType"
@@ -219,35 +195,35 @@
           <el-option :label="$t('zip_download')" :value="1" />
         </el-select>
       </el-form-item>
-      <el-form-item 
-        :label="$t('text24')" 
-        prop="concurrentDownloads"
-        v-if="formData.downloadType === 1"
-      >
-        <template #label>
-          <p style="display: flex; align-items: center">
-            <span style="margin-right: 2px">{{ $t('text24') }}</span>
-            <el-popover
-              placement="top-start"
-              trigger="hover"
-              :content="$t('text25')"
-            >
-              <template #reference>
-                <el-icon>
-                  <InfoFilled />
-                </el-icon>
-              </template>
-            </el-popover>
-          </p>
-        </template>
-        <el-input-number 
-          v-model="formData.concurrentDownloads" 
-          :min="1" 
-          :max="20"
-          :step="1"
-          style="width: 100%"
-        />
-      </el-form-item>
+<!--      <el-form-item-->
+<!--        :label="$t('text24')"-->
+<!--        prop="concurrentDownloads"-->
+<!--        v-if="formData.downloadType === 1"-->
+<!--      >-->
+<!--        <template #label>-->
+<!--          <p style="display: flex; align-items: center">-->
+<!--            <span style="margin-right: 2px">{{ $t('text24') }}</span>-->
+<!--            <el-popover-->
+<!--              placement="top-start"-->
+<!--              trigger="hover"-->
+<!--              :content="$t('text25')"-->
+<!--            >-->
+<!--              <template #reference>-->
+<!--                <el-icon>-->
+<!--                  <InfoFilled />-->
+<!--                </el-icon>-->
+<!--              </template>-->
+<!--            </el-popover>-->
+<!--          </p>-->
+<!--        </template>-->
+<!--        <el-input-number-->
+<!--          v-model="formData.concurrentDownloads"-->
+<!--          :min="1"-->
+<!--          :max="100"-->
+<!--          :step="1"-->
+<!--          style="width: 100%"-->
+<!--        />-->
+<!--      </el-form-item>-->
       <div style="display: flex">
         <el-form-item
           prop="downloadTypeByFolders"
@@ -318,6 +294,37 @@
         </el-select>
       </el-form-item>
 
+      <div v-if="formData.downloadChannel === 'websocket'">
+        <el-collapse v-model="advancedPanels" class="advanced-collapse">
+          <el-collapse-item :title="$t('advanced_settings_title')" name="ws">
+            <p class="advanced-tip">
+              {{ $t('advanced_settings_desc') }}
+            </p>
+            <el-form-item
+              :label="$t('websocket_host')"
+              prop="wsHost"
+            >
+              <el-input
+                v-model="formData.wsHost"
+                :placeholder="$t('websocket_host_placeholder')"
+              />
+            </el-form-item>
+            <el-form-item
+              :label="$t('websocket_port')"
+              prop="wsPort"
+            >
+              <el-input-number
+                v-model="formData.wsPort"
+                :min="1"
+                :max="65535"
+                :placeholder="$t('websocket_port_placeholder')"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+
       <div class="btns">
         <el-button type="primary" @click="submit">
           {{ $t("download") }}
@@ -366,6 +373,7 @@ const $t = i18n.global.t
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
+const advancedPanels = ref([])
 const formData = reactive({
   tableId: '',
   attachmentFileds: [],
@@ -491,7 +499,7 @@ const rules = reactive({
     {
       type: 'number',
       min: 1,
-      max: 20,
+      max: 100,
       message: $t('error_concurrent_downloads_range'),
       trigger: 'change'
     }
@@ -687,5 +695,13 @@ onMounted(async() => {
   .el-icon {
     margin-right: 3px;
   }
+}
+.advanced-collapse {
+  margin-bottom: 16px;
+}
+.advanced-tip {
+  font-size: 13px;
+  color: var(--N500);
+  margin-bottom: 12px;
 }
 </style>
