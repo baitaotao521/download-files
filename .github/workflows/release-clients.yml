@@ -50,17 +50,18 @@ jobs:
               python -m pip install --upgrade pip --user
               python -m pip install --user -r scripts/requirements.txt
               python -m pip install --user pyinstaller
-              pyinstaller ${CLI_ENTRY} --onefile --noconfirm --name feishu-downloader-cli
-              pyinstaller ${DESKTOP_ENTRY} --onefile --windowed --noconfirm --name feishu-downloader-desktop
-              cd dist
-              tar -czf ../feishu-download-clients-linux-${ARCH_TAG}.tar.gz *
+              pyinstaller ${CLI_ENTRY} --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+              pyinstaller ${DESKTOP_ENTRY} --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+              mkdir -p artifacts
+              mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
+              mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
             "
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: feishu-download-clients-linux-${{ matrix.arch_tag }}
-          path: feishu-download-clients-linux-${{ matrix.arch_tag }}.tar.gz
+          path: artifacts/*
           if-no-files-found: error
 
   windows:
@@ -90,21 +91,22 @@ jobs:
           pip install -r scripts/requirements.txt pyinstaller
 
       - name: Build CLI
-        run: pyinstaller $env:CLI_ENTRY --onefile --noconfirm --name feishu-downloader-cli
+        run: pyinstaller $env:CLI_ENTRY --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $env:DESKTOP_ENTRY --onefile --windowed --noconfirm --name feishu-downloader-desktop
+        run: pyinstaller $env:DESKTOP_ENTRY --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
 
-      - name: Package artifact
+      - name: Prepare artifacts
         run: |
-          cd dist
-          Compress-Archive -Path * -DestinationPath "..\feishu-download-clients-windows-${{ matrix.arch_tag }}.zip"
+          New-Item -ItemType Directory -Path artifacts | Out-Null
+          Move-Item dist\feishu-downloader-cli.exe artifacts\feishu-downloader-cli-windows-${{ matrix.arch_tag }}.exe
+          Move-Item dist\feishu-downloader-desktop.exe artifacts\feishu-downloader-desktop-windows-${{ matrix.arch_tag }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: feishu-download-clients-windows-${{ matrix.arch_tag }}
-          path: feishu-download-clients-windows-${{ matrix.arch_tag }}.zip
+          path: artifacts\*
           if-no-files-found: error
 
   macos:
@@ -133,21 +135,22 @@ jobs:
           pip install -r scripts/requirements.txt pyinstaller
 
       - name: Build CLI
-        run: pyinstaller $CLI_ENTRY --onefile --noconfirm --name feishu-downloader-cli
+        run: pyinstaller $CLI_ENTRY --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $DESKTOP_ENTRY --onefile --windowed --noconfirm --name feishu-downloader-desktop
+        run: pyinstaller $DESKTOP_ENTRY --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
 
-      - name: Package artifact
+      - name: Prepare artifacts
         run: |
-          cd dist
-          zip -r ../feishu-download-clients-macos-${{ matrix.arch_tag }}.zip *
+          mkdir -p artifacts
+          mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-macos-${{ matrix.arch_tag }}
+          mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-macos-${{ matrix.arch_tag }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: feishu-download-clients-macos-${{ matrix.arch_tag }}
-          path: feishu-download-clients-macos-${{ matrix.arch_tag }}.zip
+          path: artifacts/*
           if-no-files-found: error
 
   publish:
@@ -163,13 +166,15 @@ jobs:
         with:
           path: release
 
-      - name: Display downloaded files
+      - name: Collect binaries
         run: |
-          ls -R release
+          mkdir bundle
+          find release -maxdepth 5 -type f -print -exec mv {} bundle/ \;
+          ls -l bundle
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: release/**/*.*
+          files: bundle/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
