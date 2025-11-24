@@ -213,11 +213,26 @@ onMounted(async() => {
   fileDownloader.on('finshed', (cells) => {
     emit('finsh')
   })
-  fileDownloader.on('zip_progress', (percent) => {
+  fileDownloader.on('zip_progress', (payload) => {
     maxInfo.value = ''
+    if (payload && typeof payload === 'object') {
+      if (payload.stage === 'zip') {
+        const path = payload.path || payload.message || ''
+        zipProgressText.value = $t('websocket_zip_stage_message', { path })
+        return
+      }
+      if (payload.stage === 'job_complete') {
+        zipProgressText.value = $t('websocket_job_stage_message')
+        return
+      }
+      if (payload.message) {
+        zipProgressText.value = payload.message
+        return
+      }
+    }
     const text = $t('file_packing_progress_message').replace(
       'percentage',
-      percent
+      payload
     )
     zipProgressText.value = text
   })

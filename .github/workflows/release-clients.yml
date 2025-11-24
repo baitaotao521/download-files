@@ -1,0 +1,231 @@
+name: Build Download Clients
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'release-*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  CLI_ENTRY: scripts/ws_downloader.py
+  DESKTOP_ENTRY: scripts/ws_desktop.py
+
+jobs:
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Package frontend bundle
+        run: |
+          cd dist
+          zip -r ../frontend-dist.zip .
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist.zip
+          if-no-files-found: error
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: dist
+
+  linux:
+    name: Linux ${{ matrix.arch_tag }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch_tag: x64
+          - platform: linux/arm64
+            arch_tag: arm64
+          - platform: linux/arm/v7
+            arch_tag: armv7
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build binaries inside container
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH_TAG: ${{ matrix.arch_tag }}
+        run: |
+          docker run --rm --platform "${PLATFORM}" \
+            --user "$(id -u):$(id -g)" \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            python:3.10 bash -c "
+              set -euo pipefail
+              export HOME=/tmp
+              export PATH=\"\$HOME/.local/bin:\$PATH\"
+              python -m pip install --upgrade pip --user
+              python -m pip install --user -r scripts/requirements.txt
+              python -m pip install --user pyinstaller
+              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+              mkdir -p artifacts
+              mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
+              mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
+            "
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feishu-download-clients-linux-${{ matrix.arch_tag }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch_tag }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python_arch: x64
+            arch_tag: x64
+          - python_arch: x86
+            arch_tag: x86
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          architecture: ${{ matrix.python_arch }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt pyinstaller
+
+      - name: Build CLI
+        run: pyinstaller $env:CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+
+      - name: Build Desktop
+        run: pyinstaller $env:DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+
+      - name: Prepare artifacts
+        run: |
+          New-Item -ItemType Directory -Path artifacts | Out-Null
+          Move-Item dist\feishu-downloader-cli.exe artifacts\feishu-downloader-cli-windows-${{ matrix.arch_tag }}.exe
+          Move-Item dist\feishu-downloader-desktop.exe artifacts\feishu-downloader-desktop-windows-${{ matrix.arch_tag }}.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feishu-download-clients-windows-${{ matrix.arch_tag }}
+          path: artifacts\*
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch_tag }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch_tag: x64
+          - runner: macos-14
+            arch_tag: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt pyinstaller
+
+      - name: Build CLI
+        run: pyinstaller $CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+
+      - name: Build Desktop
+        run: pyinstaller $DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-macos-${{ matrix.arch_tag }}
+          mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-macos-${{ matrix.arch_tag }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: feishu-download-clients-macos-${{ matrix.arch_tag }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  deploy_pages:
+    name: Deploy GitHub Pages
+    needs: frontend
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  publish:
+    name: Publish Release Assets
+    needs:
+      - frontend
+      - linux
+      - windows
+      - macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+
+      - name: Collect binaries
+        run: |
+          mkdir bundle
+          find release -maxdepth 5 -type f -print -exec mv {} bundle/ \;
+          ls -l bundle
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bundle/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
