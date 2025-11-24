@@ -8,12 +8,50 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 env:
   CLI_ENTRY: scripts/ws_downloader.py
   DESKTOP_ENTRY: scripts/ws_desktop.py
 
 jobs:
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Package frontend bundle
+        run: |
+          cd dist
+          zip -r ../frontend-dist.zip .
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist.zip
+          if-no-files-found: error
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: dist
+
   linux:
     name: Linux ${{ matrix.arch_tag }}
     runs-on: ubuntu-latest
@@ -153,9 +191,22 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  deploy_pages:
+    name: Deploy GitHub Pages
+    needs: frontend
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
   publish:
     name: Publish Release Assets
     needs:
+      - frontend
       - linux
       - windows
       - macos
