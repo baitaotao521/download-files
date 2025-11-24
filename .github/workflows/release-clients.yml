@@ -50,8 +50,8 @@ jobs:
               python -m pip install --upgrade pip --user
               python -m pip install --user -r scripts/requirements.txt
               python -m pip install --user pyinstaller
-              pyinstaller ${CLI_ENTRY} --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
-              pyinstaller ${DESKTOP_ENTRY} --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
               mkdir -p artifacts
               mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
               mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
@@ -91,10 +91,10 @@ jobs:
           pip install -r scripts/requirements.txt pyinstaller
 
       - name: Build CLI
-        run: pyinstaller $env:CLI_ENTRY --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+        run: pyinstaller $env:CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $env:DESKTOP_ENTRY --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+        run: pyinstaller $env:DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
 
       - name: Prepare artifacts
         run: |
@@ -135,10 +135,10 @@ jobs:
           pip install -r scripts/requirements.txt pyinstaller
 
       - name: Build CLI
-        run: pyinstaller $CLI_ENTRY --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
+        run: pyinstaller $CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $DESKTOP_ENTRY --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
+        run: pyinstaller $DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --name feishu-downloader-desktop
 
       - name: Prepare artifacts
         run: |
