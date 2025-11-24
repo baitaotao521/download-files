@@ -45,8 +45,11 @@ jobs:
             -w /workspace \
             python:3.10 bash -c "
               set -euo pipefail
-              python -m pip install --upgrade pip
-              pip install -r scripts/requirements.txt pyinstaller
+              export HOME=/tmp
+              export PATH=\"\$HOME/.local/bin:\$PATH\"
+              python -m pip install --upgrade pip --user
+              python -m pip install --user -r scripts/requirements.txt
+              python -m pip install --user pyinstaller
               pyinstaller ${CLI_ENTRY} --onefile --noconfirm --name feishu-downloader-cli
               pyinstaller ${DESKTOP_ENTRY} --onefile --windowed --noconfirm --name feishu-downloader-desktop
               cd dist
