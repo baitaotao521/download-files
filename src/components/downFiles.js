@@ -19,11 +19,11 @@ const $t = i18n.global.t
 const MAX_ZIP_SIZE_NUM = 1
 
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
-const MAX_RECORD_PAGE_SIZE = 200
-const WEBSOCKET_MESSAGE_TYPE = 'feishu_attachment_link'
+
+const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
-const WEBSOCKET_OPEN_STATE = 1
+const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
 class FileDownloader {
   constructor(formData) {
@@ -38,9 +38,15 @@ class FileDownloader {
     this.zip = null
     this.cellList = []
   }
+  /**
+   * 判断当前是否需要通过 WebSocket 推送文件链接。
+   */
+  isWebSocketChannel() {
+    return this.downloadChannel === 'websocket'
+  }
   async loopGetRecordIdList(list = [], pageToken) {
     const params = {
-      pageSize: Math.min(MAX_RECORD_PAGE_SIZE, this.recordPageSize || MAX_RECORD_PAGE_SIZE),
+      pageSize: 200,
       viewId: this.viewId
     }
     if (pageToken) {
@@ -138,8 +144,9 @@ class FileDownloader {
     })
   }
   async setFolderPath() {
-    const needFolder = this.downloadType === 1 || this.downloadType === 3
-    if (!needFolder) return
+    // 逐个下载
+    if (this.downloadType !== 1) return
+    // zip不需要文件夹分类
     if (!this.downloadTypeByFolders) return
 
     // 封装获取和处理文件夹名称的逻辑
@@ -255,164 +262,182 @@ class FileDownloader {
       await downLocal(fileInfo)
     }
   }
-
-  // 通过 WebSocket 将临时链接转交给外部 Python 程序
-  async sendLinksViaWebSocket() {
-    if (!this.wsEndpoint) {
-      this.emit('warn', $t('error_ws_endpoint_required'))
-      return
-    }
-    if (!this.wsConcurrentDownloads) {
-      this.emit('warn', $t('error_ws_concurrent_required'))
-      return
-    }
-    const [wsError, socket] = await to(this.createWebSocketConnection())
-    if (wsError || !socket) {
-      this.emit('warn', wsError?.message || $t('error_websocket_connection_failed'))
-      return
-    }
-    const jobId = `${Date.now()}_${this.tableId || ''}`
+  /**
+   * 将附件临时链接推送给本地 Python WebSocket 服务端。
+   */
+  async websocketDownload() {
+    const wsUrl = this._buildWebSocketUrl()
+    const socket = await this._createWebSocket(wsUrl)
+    const completion = this._bindWebSocketLifecycle(socket)
+    const jobId = `${Date.now()}`
     try {
-      const configPayload = {
+      this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_CONFIG_TYPE,
         data: {
+          concurrent: Number(this.concurrentDownloads) || 5,
+          zipAfterDownload: this.downloadType === 1,
           jobId,
-          zipAfterDownload: this.wsZipAfterDownload,
-          zipName: this.zipName,
+          jobName: this.zipName || jobId,
+          zipName: this.zipName || jobId,
           total: this.cellList.length
         }
-      }
-      const [configError] = await to(this.sendMessageThroughWebSocket(socket, configPayload))
-      if (configError) {
-        this.emit('warn', configError.message || $t('error_websocket_send_failed'))
-        return
-      }
-      const concurrency = this.wsConcurrentDownloads || 5
-      const superTask = new SuperTask(concurrency)
-      const sendErrors = []
-      const sendQueue = []
-      const scheduleSend = (fileInfo) => {
-        if (sendErrors.length) return
-        const sendPromise = (async() => {
-          this.emit('progress', {
-            index: fileInfo.order,
+      })
+      for (const fileInfo of this.cellList) {
+        await this.getAttachmentUrl(fileInfo)
+        this.emit('progress', {
+          index: fileInfo.order,
+          name: fileInfo.name,
+          size: fileInfo.size,
+          percentage: 0
+        })
+        this._sendWebSocketMessage(socket, {
+          type: WEBSOCKET_LINK_TYPE,
+          data: {
+            downloadUrl: fileInfo.fileUrl,
             name: fileInfo.name,
-            size: fileInfo.size,
-            percentage: 0
-          })
-          const payload = {
-            type: WEBSOCKET_MESSAGE_TYPE,
-            data: {
-              jobId,
-              downloadUrl: fileInfo.fileUrl,
-              name: fileInfo.name,
-              path: fileInfo.path,
-              size: fileInfo.size,
-              token: fileInfo.token,
-              recordId: fileInfo.recordId,
-              fieldId: fileInfo.fieldId,
-              order: fileInfo.order
-            }
+            path: fileInfo.path,
+            order: fileInfo.order,
+            size: fileInfo.size
           }
-          const [sendError] = await to(this.sendMessageThroughWebSocket(socket, payload))
-          if (sendError) {
-            sendErrors.push({ error: sendError, order: fileInfo.order })
-            this.emit('error', {
-              message: $t('error_websocket_send_failed'),
-              index: fileInfo.order
-            })
-            throw sendError
-          }
-          this.emit('progress', {
-            index: fileInfo.order,
-            percentage: 100
-          })
-        })()
-        sendQueue.push(sendPromise)
+        })
       }
-      const tasks = this.cellList.map((fileInfo) => {
-        return async() => {
-          if (sendErrors.length) return
-          const [urlErr] = await to(this.getAttachmentUrl(fileInfo))
-          if (urlErr) {
-            sendErrors.push({ error: urlErr, order: fileInfo.order })
-            this.emit('error', {
-              message: urlErr.message,
-              index: fileInfo.order
-            })
-            throw urlErr
-          }
-          scheduleSend(fileInfo)
+      this._sendWebSocketMessage(socket, {
+        type: WEBSOCKET_COMPLETE_TYPE,
+        data: {
+          jobId
         }
       })
-      superTask.setTasks(tasks)
-      await superTask.finished().catch(() => {})
-      await Promise.allSettled(sendQueue)
-      if (sendErrors.length) {
-        return
-      }
-      const [completeError] = await to(this.sendMessageThroughWebSocket(socket, {
-        type: WEBSOCKET_COMPLETE_TYPE,
-        data: { jobId }
-      }))
-      if (completeError) {
-        this.emit('warn', completeError.message || $t('error_websocket_send_failed'))
-      }
+      await completion
     } finally {
-      socket.close()
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close()
+      }
     }
   }
-
-  // 创建 WebSocket 实例
-  async createWebSocketConnection() {
-    const WebSocketCtor =
-      typeof window !== 'undefined'
-        ? window.WebSocket
-        : typeof WebSocket !== 'undefined'
-          ? WebSocket
-          : null
-    if (!WebSocketCtor) {
-      throw new Error($t('error_websocket_not_supported'))
+  /**
+   * 组合用户输入的 WebSocket URL。
+   */
+  _buildWebSocketUrl() {
+    const rawHost = (this.wsHost || '').trim()
+    if (!rawHost) {
+      throw new Error($t('error_websocket_host_required'))
     }
-    return await new Promise((resolve, reject) => {
-      let socket = null
-      try {
-        socket = new WebSocketCtor(this.wsEndpoint)
-      } catch (error) {
-        reject(error)
-        return
+    if (/^wss?:\/\//i.test(rawHost)) {
+      return rawHost
+    }
+    const port = this.wsPort ? String(this.wsPort).trim() : ''
+    if (rawHost.includes(':') || !port) {
+      return `ws://${rawHost}`
+    }
+    return `ws://${rawHost}:${port}`
+  }
+  /**
+   * 建立 WebSocket 连接并在 ready 时返回实例。
+   */
+  _createWebSocket(url) {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(url)
+      const cleanup = () => {
+        socket.onopen = null
+        socket.onerror = null
       }
-      const handleError = (event) => {
-        socket?.removeEventListener('open', handleOpen)
-        socket?.removeEventListener('error', handleError)
-        reject(
-          event?.error || new Error($t('error_websocket_connection_failed'))
-        )
-      }
-      const handleOpen = () => {
-        socket.removeEventListener('error', handleError)
-        socket.removeEventListener('open', handleOpen)
+      socket.onopen = () => {
+        cleanup()
         resolve(socket)
       }
-      socket.addEventListener('open', handleOpen)
-      socket.addEventListener('error', handleError)
+      socket.onerror = () => {
+        cleanup()
+        reject(new Error($t('websocket_connection_failed')))
+      }
     })
   }
-
-  // 发送 WebSocket 消息
-  async sendMessageThroughWebSocket(socket, payload) {
-    return await new Promise((resolve, reject) => {
-      if (!socket || socket.readyState !== WEBSOCKET_OPEN_STATE) {
-        reject(new Error($t('error_websocket_connection_failed')))
-        return
+  /**
+   * 监听服务端 ACK，驱动 UI 并在任务完成或失败时结束。
+   */
+  _bindWebSocketLifecycle(socket) {
+    return new Promise((resolve, reject) => {
+      let finished = false
+      let hasJobCompleted = false
+      const finish = (error) => {
+        if (finished) return
+        finished = true
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
       }
-      try {
-        socket.send(JSON.stringify(payload))
-        resolve(true)
-      } catch (error) {
-        reject(error)
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data)
+          if (payload.type !== WEBSOCKET_ACK_TYPE) {
+            return
+          }
+          const data = payload.data || {}
+          const rawOrder = data.order
+          const order = Number(rawOrder)
+          const status = data.status
+          const stage = data.stage
+          if (Number.isInteger(order) && order > 0) {
+            if (status === 'success') {
+              this.emit('progress', {
+                index: order,
+                percentage: 100
+              })
+            } else {
+              this.emit('error', {
+                index: order,
+                message: data.message || $t('file_download_failed')
+              })
+            }
+            return
+          }
+          if (stage === 'zip') {
+            this.emit('zip_progress', {
+              stage,
+              path: data.path,
+              message: data.message
+            })
+            return
+          }
+          if (stage === 'job_complete') {
+            hasJobCompleted = true
+            this.emit('zip_progress', {
+              stage,
+              message: data.message
+            })
+            finish()
+            return
+          }
+          if (status === 'error') {
+            const message = data.message || $t('file_download_failed')
+            this.emit('warn', message)
+            finish(new Error(message))
+          }
+        } catch (error) {
+          console.error('failed to parse websocket ack', error)
+        }
+      }
+      socket.onerror = () => {
+        finish(new Error($t('websocket_connection_failed')))
+      }
+      socket.onclose = () => {
+        if (hasJobCompleted) {
+          finish()
+        } else {
+          finish(new Error($t('websocket_connection_failed')))
+        }
       }
     })
+  }
+  /**
+   * 发送序列化后的 WebSocket 消息。
+   */
+  _sendWebSocketMessage(socket, payload) {
+    if (socket.readyState !== WebSocket.OPEN) {
+      throw new Error($t('websocket_connection_failed'))
+    }
+    socket.send(JSON.stringify(payload))
   }
 
   async downloadFile(fileInfo) {
@@ -473,15 +498,22 @@ class FileDownloader {
       this.emit('finshed')
       return ''
     }
-    if (this.downloadType === 2) {
-      // 逐个下载
-      await this.sigleDownLoad()
-    } else if (this.downloadType === 3) {
-      await this.sendLinksViaWebSocket()
-    } else {
-      await this.zipDownLoad()
+    try {
+      if (this.isWebSocketChannel()) {
+        await this.websocketDownload()
+      } else if (this.downloadType === 2) {
+        // 逐个下载
+        await this.sigleDownLoad()
+      } else {
+        await this.zipDownLoad()
+      }
+    } catch (error) {
+      console.error('download failed', error)
+      const message = error?.message || $t('file_download_failed')
+      this.emit('warn', message)
+    } finally {
+      this.emit('finshed')
     }
-    this.emit('finshed')
   }
 }
 

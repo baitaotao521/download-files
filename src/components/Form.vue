@@ -174,6 +174,41 @@
         </template>
         <el-input v-model="formData.nameMark" />
       </el-form-item>
+      <el-form-item :label="$t('download_channel')" prop="downloadChannel">
+        <el-select
+          v-model="formData.downloadChannel"
+          :placeholder="$t('select_download_channel')"
+          style="width: 100%"
+        >
+          <el-option :label="$t('download_channel_browser')" value="browser" />
+          <el-option :label="$t('download_channel_ws')" value="websocket" />
+        </el-select>
+      </el-form-item>
+
+      <el-form-item
+        v-if="formData.downloadChannel === 'websocket'"
+        :label="$t('websocket_host')"
+        prop="wsHost"
+      >
+        <el-input
+          v-model="formData.wsHost"
+          :placeholder="$t('websocket_host_placeholder')"
+        />
+      </el-form-item>
+      <el-form-item
+        v-if="formData.downloadChannel === 'websocket'"
+        :label="$t('websocket_port')"
+        prop="wsPort"
+      >
+        <el-input-number
+          v-model="formData.wsPort"
+          :min="1"
+          :max="65535"
+          :placeholder="$t('websocket_port_placeholder')"
+          style="width: 100%"
+        />
+      </el-form-item>
+
       <el-form-item :label="$t('download_method')" prop="downloadType">
         <el-select
           v-model="formData.downloadType"
@@ -182,11 +217,10 @@
         >
           <el-option :label="$t('download_individual_files')" :value="2" />
           <el-option :label="$t('zip_download')" :value="1" />
-          <el-option :label="$t('ws_download')" :value="3" />
         </el-select>
       </el-form-item>
-      <el-form-item \
-        :label="$t('text24')"
+      <el-form-item 
+        :label="$t('text24')" 
         prop="concurrentDownloads"
         v-if="formData.downloadType === 1"
       >
@@ -206,99 +240,18 @@
             </el-popover>
           </p>
         </template>
-        <el-input-number
-          v-model="formData.concurrentDownloads"
-          :min="1"
+        <el-input-number 
+          v-model="formData.concurrentDownloads" 
+          :min="1" 
           :max="20"
           :step="1"
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item
-        :label="$t('ws_concurrent_downloads')"
-        prop="wsConcurrentDownloads"
-        v-if="formData.downloadType === 3"
-      >
-        <template #label>
-          <p style="display: flex; align-items: center">
-            <span style="margin-right: 2px">{{ $t('ws_concurrent_downloads') }}</span>
-            <el-popover
-              placement="top-start"
-              trigger="hover"
-              :content="$t('ws_concurrent_downloads_hint')"
-            >
-              <template #reference>
-                <el-icon>
-                  <InfoFilled />
-                </el-icon>
-              </template>
-            </el-popover>
-          </p>
-        </template>
-        <el-input-number
-          v-model="formData.wsConcurrentDownloads"
-          :min="1"
-          :max="30"
-          :step="1"
-          style="width: 100%"
-        />
-      </el-form-item>
-      <el-form-item
-        :label="$t('ws_zip_option')"
-        v-if="formData.downloadType === 3"
-      >
-        <template #label>
-          <p style="display: flex; align-items: center">
-            <span style="margin-right: 2px">{{ $t('ws_zip_option') }}</span>
-            <el-popover
-              placement="top-start"
-              trigger="hover"
-              :content="$t('ws_zip_option_hint')"
-            >
-              <template #reference>
-                <el-icon>
-                  <InfoFilled />
-                </el-icon>
-              </template>
-            </el-popover>
-          </p>
-        </template>
-        <el-switch
-          v-model="formData.wsZipAfterDownload"
-          :active-text="$t('ws_zip_option_on')"
-          :inactive-text="$t('ws_zip_option_off')"
-        />
-      </el-form-item>
-      <el-form-item
-        v-if="formData.downloadType === 3"
-        :label="$t('ws_endpoint_label')"
-        prop="wsEndpoint"
-      >
-        <template #label>
-          <p style="display: flex; align-items: center">
-            <span style="margin-right: 2px">{{ $t('ws_endpoint_label') }}</span>
-            <el-popover
-              placement="top-start"
-              trigger="hover"
-              :content="$t('ws_endpoint_hint')"
-            >
-              <template #reference>
-                <el-icon>
-                  <InfoFilled />
-                </el-icon>
-              </template>
-            </el-popover>
-          </p>
-        </template>
-        <el-input
-          v-model="formData.wsEndpoint"
-          :placeholder="$t('ws_endpoint_placeholder')"
-        />
-      </el-form-item>
       <div style="display: flex">
         <el-form-item
           prop="downloadTypeByFolders"
-          v-if="formData.downloadType === 1 || formData.downloadType === 3"
+          v-if="formData.downloadType === 1"
         >
           <template #label>
             <p style="display: flex; align-items: center">
@@ -329,7 +282,7 @@
       <el-form-item
         :label="$t('first_directory')"
         prop="firstFolderKey"
-        v-if="formData.downloadTypeByFolders && (formData.downloadType === 1 || formData.downloadType === 3)"
+        v-if="formData.downloadType === 1 && formData.downloadTypeByFolders"
       >
         <el-select
           v-model="formData.firstFolderKey"
@@ -348,7 +301,7 @@
       <el-form-item
         :label="$t('second_directory')"
         prop="secondFolderKey"
-        v-if="formData.downloadTypeByFolders && (formData.downloadType === 1 || formData.downloadType === 3)"
+        v-if="formData.downloadType === 1 && formData.downloadTypeByFolders"
       >
         <el-select
           clearable
@@ -420,14 +373,14 @@ const formData = reactive({
   fileNameByField: [],
   nameMark: '-',
   viewId: '',
+  downloadChannel: 'browser',
   downloadType: 1,
   downloadTypeByFolders: false,
   firstFolderKey: '',
   secondFolderKey: '',
   concurrentDownloads: 5,
-  wsConcurrentDownloads: 5,
-  wsZipAfterDownload: false,
-  wsEndpoint: 'ws://127.0.0.1:8765'
+  wsHost: '127.0.0.1',
+  wsPort: 11548
 })
 const rules = reactive({
   tableId: [
@@ -485,6 +438,50 @@ const rules = reactive({
       trigger: 'change'
     }
   ],
+  downloadChannel: [
+    {
+      required: true,
+      message: $t('select_download_channel'),
+      trigger: 'change'
+    }
+  ],
+  wsHost: [
+    {
+      validator: (rule, value, callback) => {
+        if (formData.downloadChannel !== 'websocket') {
+          callback()
+          return
+        }
+        if (!value) {
+          callback(new Error($t('error_websocket_host_required')))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }
+  ],
+  wsPort: [
+    {
+      validator: (rule, value, callback) => {
+        if (formData.downloadChannel !== 'websocket') {
+          callback()
+          return
+        }
+        if (value === undefined || value === null || value === '') {
+          callback(new Error($t('error_websocket_port_required')))
+          return
+        }
+        const port = Number(value)
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          callback(new Error($t('error_websocket_port_range')))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }
+  ],
   concurrentDownloads: [
     {
       required: true,
@@ -496,52 +493,6 @@ const rules = reactive({
       min: 1,
       max: 20,
       message: $t('error_concurrent_downloads_range'),
-      trigger: 'change'
-    }
-  ],
-  wsEndpoint: [
-    {
-      validator: (rule, value, callback) => {
-        if (formData.downloadType !== 3) {
-          callback()
-          return
-        }
-        if (!value) {
-          callback(new Error($t('error_ws_endpoint_required')))
-          return
-        }
-        try {
-          const url = new URL(value)
-          if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-            callback(new Error($t('error_ws_endpoint_invalid')))
-            return
-          }
-        } catch (err) {
-          callback(new Error($t('error_ws_endpoint_invalid')))
-          return
-        }
-        callback()
-      },
-      trigger: 'blur'
-    }
-  ],
-  wsConcurrentDownloads: [
-    {
-      validator: (rule, value, callback) => {
-        if (formData.downloadType !== 3) {
-          callback()
-          return
-        }
-        if (value === undefined || value === null || value === '') {
-          callback(new Error($t('error_ws_concurrent_required')))
-          return
-        }
-        if (value < 1 || value > 30) {
-          callback(new Error($t('error_ws_concurrent_range')))
-          return
-        }
-        callback()
-      },
       trigger: 'change'
     }
   ],
@@ -654,22 +605,6 @@ watch(
   (newVal) => {
     if (!newVal && formData.firstFolderKey) {
       elform.value.validateField('secondFolderKey')
-    }
-  }
-)
-watch(
-  () => formData.downloadType,
-  (downloadType) => {
-    if (!elform.value) return
-    if (downloadType !== 3) {
-      elform.value.clearValidate('wsEndpoint')
-      elform.value.clearValidate('wsConcurrentDownloads')
-    }
-    if (downloadType !== 1 && downloadType !== 3) {
-      formData.downloadTypeByFolders = false
-      formData.firstFolderKey = ''
-      formData.secondFolderKey = ''
-      elform.value.clearValidate('secondFolderKey')
     }
   }
 )
