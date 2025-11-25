@@ -45,34 +45,36 @@ jobs:
             --user "$(id -u):$(id -g)" \
             -v "${PWD}:/workspace" \
             -w /workspace \
-            python:3.12 bash -c "
-              set -euo pipefail
-              export HOME=/tmp
-              export PATH=\"\$HOME/.local/bin:\$PATH\"
-              python -m pip install --upgrade pip --user
-              python -m pip install --user -r scripts/requirements.txt
-              python -m pip install --user pyinstaller
-              export UPX_VERSION=4.2.4
-              case "${ARCH_TAG}" in
-                x64) UPX_PKG_ARCH=amd64_linux ;;
-                arm64) UPX_PKG_ARCH=arm64_linux ;;
-                armv7) UPX_PKG_ARCH=arm_linux ;;
-                *) echo "Unsupported arch ${ARCH_TAG}" >&2; exit 1 ;;
-              esac
-              export UPX_PKG_ARCH
-              export UPX_ROOT=/tmp/upx-src
-              mkdir -p "${UPX_ROOT}"
-              UPX_ARCHIVE="upx-${UPX_VERSION}-${UPX_PKG_ARCH}.tar.xz"
-              curl -L "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${UPX_ARCHIVE}" -o "${UPX_ROOT}/${UPX_ARCHIVE}"
-              tar -C "${UPX_ROOT}" -xf "${UPX_ROOT}/${UPX_ARCHIVE}"
-              export UPX_DIR="${UPX_ROOT}/upx-${UPX_VERSION}-${UPX_PKG_ARCH}"
-              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
-              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
-              mkdir -p artifacts
-              mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
-              mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
-            "
-
+            -e ARCH_TAG \
+            -e CLI_ENTRY \
+            -e DESKTOP_ENTRY \
+            python:3.12 bash <<'PYINSTALLER'
+          set -euo pipefail
+          export HOME=/tmp
+          export PATH="$HOME/.local/bin:$PATH"
+          python -m pip install --upgrade pip --user
+          python -m pip install --user -r scripts/requirements.txt
+          python -m pip install --user pyinstaller
+          export UPX_VERSION=4.2.4
+          case "${ARCH_TAG}" in
+            x64) UPX_PKG_ARCH=amd64_linux ;;
+            arm64) UPX_PKG_ARCH=arm64_linux ;;
+            armv7) UPX_PKG_ARCH=arm_linux ;;
+            *) echo "Unsupported arch ${ARCH_TAG}" >&2; exit 1 ;;
+          esac
+          export UPX_PKG_ARCH
+          export UPX_ROOT=/tmp/upx-src
+          mkdir -p "${UPX_ROOT}"
+          UPX_ARCHIVE="upx-${UPX_VERSION}-${UPX_PKG_ARCH}.tar.xz"
+          curl -L "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${UPX_ARCHIVE}" -o "${UPX_ROOT}/${UPX_ARCHIVE}"
+          tar -C "${UPX_ROOT}" -xf "${UPX_ROOT}/${UPX_ARCHIVE}"
+          export UPX_DIR="${UPX_ROOT}/upx-${UPX_VERSION}-${UPX_PKG_ARCH}"
+          pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
+          pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
+          mkdir -p artifacts
+          mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
+          mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
+          PYINSTALLER
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
