@@ -7,6 +7,8 @@ export class SuperTask {
     this.resolveFinished = null
     this.rejectFinished = null
     this.errors = []
+    this.cancelled = false
+    this.cancelReason = null
   }
 
   // 添加单个任务
@@ -26,7 +28,9 @@ export class SuperTask {
   finished() {
     return new Promise((resolve, reject) => {
       if (this.tasks.length === 0 && this.runningCount === 0) {
-        if (this.errors.length > 0) {
+        if (this.cancelled) {
+          reject(this.cancelReason || new Error('cancelled'))
+        } else if (this.errors.length > 0) {
           reject(this.errors)
         } else {
           resolve()
@@ -38,9 +42,21 @@ export class SuperTask {
     })
   }
 
+  cancel(reason = new Error('cancelled')) {
+    if (this.cancelled) return
+    this.cancelled = true
+    this.cancelReason = reason
+    this.tasks = []
+    if (this.runningCount === 0) {
+      if (this.rejectFinished) {
+        this.rejectFinished(reason)
+      }
+    }
+  }
+
   // 执行任务
   _run() {
-    while (this.runningCount < this.parallelCount && this.tasks.length > 0) {
+    while (!this.cancelled && this.runningCount < this.parallelCount && this.tasks.length > 0) {
       const { task, resolve, reject } = this.tasks.shift()
       this.runningCount++
       task()
@@ -60,7 +76,11 @@ export class SuperTask {
   // 检查所有任务是否完成
   _checkFinished() {
     if (this.tasks.length === 0 && this.runningCount === 0) {
-      if (this.errors.length > 0) {
+      if (this.cancelled) {
+        if (this.rejectFinished) {
+          this.rejectFinished(this.cancelReason || new Error('cancelled'))
+        }
+      } else if (this.errors.length > 0) {
         if (this.rejectFinished) {
           this.rejectFinished(this.errors)
         }

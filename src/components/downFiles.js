@@ -275,7 +275,20 @@ class FileDownloader {
   async websocketDownload() {
     const wsUrl = this._buildWebSocketUrl()
     const socket = await this._createWebSocket(wsUrl)
-    const completion = this._bindWebSocketLifecycle(socket)
+    let abortDownloads = false
+    let abortReason = null
+    let superTask = null
+    const stopAllDownloads = (reason) => {
+      if (abortDownloads) return
+      abortDownloads = true
+      abortReason = reason instanceof Error ? reason : new Error(reason || $t('file_download_failed'))
+      if (superTask) {
+        superTask.cancel(abortReason)
+      }
+    }
+    const completion = this._bindWebSocketLifecycle(socket, {
+      onFatalError: stopAllDownloads
+    })
     const jobId = `${Date.now()}`
     const concurrency = Math.max(1, Number(this.concurrentDownloads) || 5)
     const useTokenMode = this.isTokenWebSocketChannel()
@@ -302,14 +315,21 @@ class FileDownloader {
         }
       })
       // 并行预取附件链接，避免串行等待造成阻塞
-      const superTask = new SuperTask(concurrency)
+      superTask = new SuperTask(concurrency)
+      if (abortDownloads) {
+        superTask.cancel(abortReason || new Error($t('file_download_failed')))
+        await completion.catch(() => {})
+        return
+      }
       const tasks = this.cellList.map((fileInfo) => {
         return async() => {
+          if (abortDownloads) return
           const { order } = fileInfo
           try {
             if (!useTokenMode) {
               await this.getAttachmentUrl(fileInfo)
             }
+            if (abortDownloads) return
             this.emit('progress', {
               index: order,
               name: fileInfo.name,
@@ -329,9 +349,11 @@ class FileDownloader {
             } else {
               payload.downloadUrl = fileInfo.fileUrl
             }
+            if (abortDownloads) return
             if (useTokenMode) {
-              await this._acquireTokenModeSlot()
+              await this._acquireTokenModeSlot(() => abortDownloads)
             }
+            if (abortDownloads) return
             this._sendWebSocketMessage(socket, {
               type: WEBSOCKET_LINK_TYPE,
               data: payload
@@ -348,13 +370,17 @@ class FileDownloader {
       })
       superTask.setTasks(tasks)
       await superTask.finished().catch(() => {})
-      this._sendWebSocketMessage(socket, {
-        type: WEBSOCKET_COMPLETE_TYPE,
-        data: {
-          jobId
-        }
-      })
-      await completion
+      if (!abortDownloads) {
+        this._sendWebSocketMessage(socket, {
+          type: WEBSOCKET_COMPLETE_TYPE,
+          data: {
+            jobId
+          }
+        })
+        await completion
+      } else {
+        await completion.catch(() => {})
+      }
     } finally {
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close()
@@ -401,10 +427,19 @@ class FileDownloader {
   /**
    * 监听服务端 ACK，驱动 UI 并在任务完成或失败时结束。
    */
-  _bindWebSocketLifecycle(socket) {
+  _bindWebSocketLifecycle(socket, hooks = {}) {
     return new Promise((resolve, reject) => {
       let finished = false
       let hasJobCompleted = false
+      const notifyFatal = (error) => {
+        if (typeof hooks.onFatalError === 'function') {
+          try {
+            hooks.onFatalError(error)
+          } catch (err) {
+            console.error('onFatalError hook failed', err)
+          }
+        }
+      }
       const finish = (error) => {
         if (finished) return
         finished = true
@@ -436,6 +471,8 @@ class FileDownloader {
                 index: order,
                 message: data.message || $t('file_download_failed')
               })
+              notifyFatal(data.message || $t('file_download_failed'))
+              finish(new Error(data.message || $t('file_download_failed')))
             }
             return
           }
@@ -459,6 +496,7 @@ class FileDownloader {
           if (status === 'error') {
             const message = data.message || $t('file_download_failed')
             this.emit('warn', message)
+            notifyFatal(message)
             finish(new Error(message))
           }
         } catch (error) {
@@ -466,12 +504,14 @@ class FileDownloader {
         }
       }
       socket.onerror = () => {
+        notifyFatal($t('websocket_connection_failed'))
         finish(new Error($t('websocket_connection_failed')))
       }
       socket.onclose = () => {
         if (hasJobCompleted) {
           finish()
         } else {
+          notifyFatal($t('websocket_connection_failed'))
           finish(new Error($t('websocket_connection_failed')))
         }
       }
@@ -487,13 +527,16 @@ class FileDownloader {
     socket.send(JSON.stringify(payload))
   }
 
-  async _acquireTokenModeSlot() {
+  async _acquireTokenModeSlot(shouldAbort) {
     const limit = 5
     const windowMs = 1000
     if (!this._tokenPushTimeline) {
       this._tokenPushTimeline = []
     }
     while (true) {
+      if (typeof shouldAbort === 'function' && shouldAbort()) {
+        return
+      }
       const now = Date.now()
       this._tokenPushTimeline = this._tokenPushTimeline.filter(
         (timestamp) => now - timestamp < windowMs

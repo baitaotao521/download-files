@@ -429,23 +429,60 @@ class AttachmentDownloader:
           }
         }
       })
-      request = (
-        DownloadMediaRequest.builder()
-        .file_token(file_token)
-        .extra(extra_payload)
-        .build()
-      )
-      response = client.drive.v1.media.download(request)
-      with destination.open('wb') as file_obj:
-        while True:
-          chunk = response.file.read(512 * 1024)
-          if not chunk:
-            break
-          file_obj.write(chunk)
-      return destination
+      max_retries = 3
+      retry_delay = 1
+      for attempt in range(max_retries):
+        if attempt:
+          logging.info('retrying download for token=%s attempt=%s', file_token, attempt + 1)
+          time.sleep(retry_delay)
+        request = (
+          DownloadMediaRequest.builder()
+          .file_token(file_token)
+          .extra(extra_payload)
+          .build()
+        )
+        response = client.drive.v1.media.download(request)
+        if not response or not response.success():
+          self._handle_download_failure(response)
+          continue
+        stream = getattr(response, 'file', None)
+        if stream is None or not hasattr(stream, 'read'):
+          logging.warning('empty file stream for token=%s', file_token)
+          continue
+        try:
+          file_content = stream.read()
+        except Exception as exc:  # noqa: BLE001
+          logging.error('failed to read file stream: %s', exc)
+          continue
+        if not file_content:
+          logging.warning('empty file content for token=%s', file_token)
+          continue
+        preview = file_content[:8].strip()
+        if preview.startswith(b'{'):
+          try:
+            payload = json.loads(file_content.decode('utf-8'))
+            code = payload.get('code')
+            message = payload.get('msg') or payload.get('error') or '下载失败'
+            if code == 1011 or 'personal token is invalid' in str(message).lower():
+              raise RuntimeError('授权码无效，请在本地客户端下载器的“服务配置”中重新填写 Personal Base Token 后重试。')
+            raise RuntimeError(message)
+          except UnicodeDecodeError:
+            logging.warning('unexpected json-like response for token=%s', file_token)
+            continue
+        try:
+          with destination.open('wb') as file_obj:
+            file_obj.write(file_content)
+        except Exception as exc:  # noqa: BLE001
+          logging.error('failed to write file %s: %s', destination, exc)
+          continue
+        if not destination.exists():
+          logging.warning('file not created after write: %s', destination)
+          continue
+        return destination
+      raise RuntimeError('下载失败，请稍后重试。')
 
     return await asyncio.to_thread(_download)
-
+  
   async def _acquire_sdk_slot(self) -> None:
     """限制 SDK 调用速率至每秒 2 次。"""
     async with self._sdk_rate_lock:
@@ -458,6 +495,43 @@ class AttachmentDownloader:
           return
         wait_time = 1 - (now - self._sdk_request_times[0])
         await asyncio.sleep(max(wait_time, 0))
+
+  def _handle_download_failure(self, response: Any) -> None:
+    message = getattr(response, 'msg', '下载失败') or '下载失败'
+    normalized = str(message).lower()
+    code = getattr(response, 'code', None)
+    raw = getattr(response, 'raw', None)
+    status_code = None
+    if raw and hasattr(raw, 'header') and isinstance(raw.header, dict):
+      status_code = raw.header.get('status_code') or raw.header.get('Status-Code')
+    raw_content = getattr(raw, 'content', None)
+    raw_text = ''
+    if isinstance(raw_content, bytes):
+      try:
+        raw_text = raw_content.decode('utf-8')
+      except UnicodeDecodeError:
+        raw_text = ''
+    elif isinstance(raw_content, str):
+      raw_text = raw_content
+    logging.error(
+      'download failed code=%s status=%s msg=%s log_id=%s raw=%s',
+      code,
+      status_code,
+      message,
+      getattr(response, 'get_log_id', lambda: None)(),
+      raw_text
+    )
+    if code == 1011 or 'personal token is invalid' in normalized:
+      raise RuntimeError('授权码无效，请在本地客户端下载器的“服务配置”中重新填写 Personal Base Token 后重试。')
+    if status_code in (400, '400'):
+      raise RuntimeError('高级权限鉴权失败，请检查 extra 参数或授权信息。')
+    if status_code in (403, '403'):
+      raise RuntimeError('没有下载权限，请确认调用身份具备访问该附件的权限。')
+    if status_code in (404, '404'):
+      raise RuntimeError('附件不存在或已被删除，请检查 file_token 是否正确。')
+    if status_code in (500, '500'):
+      raise RuntimeError('服务端异常，请稍后重试。')
+    raise RuntimeError(message)
 
   def create_sdk_client(self, app_token: str) -> Any:
     """基于 app token 构建或复用 BaseOpenSDK 客户端。"""

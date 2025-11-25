@@ -79,7 +79,7 @@
   </div>
 </template>
 <script setup>
-import { ref, onMounted, reactive, toRefs, computed, defineEmits } from 'vue'
+import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
 import ProgressCircle from './ProgressCircle.vue'
 import FileDownloader from './downFiles.js'
 import { i18n } from '@/locales/i18n.js'
