@@ -141,7 +141,7 @@ jobs:
         with:
           python-version: '3.12'
           architecture: ${{ matrix.python_arch }}
-          cache: 'pip' # 启用 pip 缓存
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -151,7 +151,6 @@ jobs:
       - name: Install UPX
         run: choco install upx -y --no-progress
 
-      # PowerShell 处理 UPX 路径
       - name: Configure UPX directory
         shell: pwsh
         run: |
@@ -160,12 +159,12 @@ jobs:
 
       - name: Build Binaries
         shell: pwsh
-        # Windows 使用分号 ; 分隔
         env:
           ADD_DATA_ARG: '--add-data="python_app/locales;python_app/locales"'
         run: |
-          pyinstaller $env:CLI_ENTRY $env:PYINSTALLER_BASE_ARGS feishu-downloader-cli $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR"
-          pyinstaller $env:DESKTOP_ENTRY $env:PYINSTALLER_BASE_ARGS feishu-downloader-desktop $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR" --windowed
+          # 修复参数解析问题
+          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR"
+          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR" --windowed
 
       - name: Prepare artifacts
         run: |
