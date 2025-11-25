@@ -16,42 +16,6 @@ env:
   DESKTOP_ENTRY: scripts/ws_desktop.py
 
 jobs:
-  frontend:
-    name: Frontend Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Package frontend bundle
-        run: |
-          cd dist
-          zip -r ../frontend-dist.zip .
-
-      - name: Upload frontend artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend-dist.zip
-          if-no-files-found: error
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
   linux:
     name: Linux ${{ matrix.arch_tag }}
     runs-on: ubuntu-latest
@@ -81,15 +45,29 @@ jobs:
             --user "$(id -u):$(id -g)" \
             -v "${PWD}:/workspace" \
             -w /workspace \
-            python:3.10 bash -c "
+            python:3.12 bash -c "
               set -euo pipefail
               export HOME=/tmp
               export PATH=\"\$HOME/.local/bin:\$PATH\"
               python -m pip install --upgrade pip --user
               python -m pip install --user -r scripts/requirements.txt
               python -m pip install --user pyinstaller
-              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --name feishu-downloader-cli
-              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --name feishu-downloader-desktop
+              export UPX_VERSION=4.2.4
+              case "${ARCH_TAG}" in
+                x64) UPX_PKG_ARCH=amd64_linux ;;
+                arm64) UPX_PKG_ARCH=arm64_linux ;;
+                armv7) UPX_PKG_ARCH=arm_linux ;;
+                *) echo "Unsupported arch ${ARCH_TAG}" >&2; exit 1 ;;
+              esac
+              export UPX_PKG_ARCH
+              export UPX_ROOT=/tmp/upx-src
+              mkdir -p "${UPX_ROOT}"
+              UPX_ARCHIVE="upx-${UPX_VERSION}-${UPX_PKG_ARCH}.tar.xz"
+              curl -L "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${UPX_ARCHIVE}" -o "${UPX_ROOT}/${UPX_ARCHIVE}"
+              tar -C "${UPX_ROOT}" -xf "${UPX_ROOT}/${UPX_ARCHIVE}"
+              export UPX_DIR="${UPX_ROOT}/upx-${UPX_VERSION}-${UPX_PKG_ARCH}"
+              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
+              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
               mkdir -p artifacts
               mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
               mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
@@ -120,19 +98,26 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
           architecture: ${{ matrix.python_arch }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt pyinstaller
+      - name: Install UPX
+        run: choco install upx -y
+      - name: Configure UPX directory
+        shell: pwsh
+        run: |
+          $upxDir = Split-Path (Get-Command upx.exe).Source
+          "UPX_DIR=$upxDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build CLI
-        run: pyinstaller $env:CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --name feishu-downloader-cli
+        run: pyinstaller $env:CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales;python_app/locales --upx-dir "$env:UPX_DIR" --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $env:DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --name feishu-downloader-desktop
+        run: pyinstaller $env:DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales;python_app/locales --upx-dir "$env:UPX_DIR" --name feishu-downloader-desktop
 
       - name: Prepare artifacts
         run: |
@@ -165,18 +150,22 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt pyinstaller
+      - name: Install UPX
+        run: brew install upx
+      - name: Configure UPX directory
+        run: echo "UPX_DIR=$(dirname $(command -v upx))" >> $GITHUB_ENV
 
       - name: Build CLI
-        run: pyinstaller $CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --name feishu-downloader-cli
+        run: pyinstaller $CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --name feishu-downloader-desktop
+        run: pyinstaller $DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
 
       - name: Prepare artifacts
         run: |
@@ -191,22 +180,9 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
-  deploy_pages:
-    name: Deploy GitHub Pages
-    needs: frontend
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
   publish:
     name: Publish Release Assets
     needs:
-      - frontend
       - linux
       - windows
       - macos
