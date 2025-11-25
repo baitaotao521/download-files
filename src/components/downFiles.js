@@ -37,6 +37,7 @@ class FileDownloader {
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
+    this._tokenPushTimeline = []
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
@@ -328,6 +329,9 @@ class FileDownloader {
             } else {
               payload.downloadUrl = fileInfo.fileUrl
             }
+            if (useTokenMode) {
+              await this._acquireTokenModeSlot()
+            }
             this._sendWebSocketMessage(socket, {
               type: WEBSOCKET_LINK_TYPE,
               data: payload
@@ -481,6 +485,26 @@ class FileDownloader {
       throw new Error($t('websocket_connection_failed'))
     }
     socket.send(JSON.stringify(payload))
+  }
+
+  async _acquireTokenModeSlot() {
+    const limit = 5
+    const windowMs = 1000
+    if (!this._tokenPushTimeline) {
+      this._tokenPushTimeline = []
+    }
+    while (true) {
+      const now = Date.now()
+      this._tokenPushTimeline = this._tokenPushTimeline.filter(
+        (timestamp) => now - timestamp < windowMs
+      )
+      if (this._tokenPushTimeline.length < limit) {
+        this._tokenPushTimeline.push(now)
+        return
+      }
+      const waitTime = windowMs - (now - this._tokenPushTimeline[0])
+      await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
+    }
   }
 
   async downloadFile(fileInfo) {
