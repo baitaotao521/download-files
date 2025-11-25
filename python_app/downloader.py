@@ -191,6 +191,14 @@ class DownloadJobState:
     file_name = file_info.get('name')
     relative_path = file_info.get('path', '')
     order = file_info.get('order')
+    identifier = record_id or file_token or download_url
+    file_key = self.handler._build_file_key(order, file_name, relative_path, identifier)
+    self.handler._monitor_file_registered(
+      file_key,
+      name=file_name or 'unknown',
+      size=int(file_info.get('size') or 0),
+      path=str(relative_path or '')
+    )
     if not file_name:
       await self.handler._send_ack(
         websocket,
@@ -198,6 +206,7 @@ class DownloadJobState:
         message='missing file name',
         order=order
       )
+      self.handler._monitor_file_status(file_key, 'failed', error='missing file name')
       return
     if self.download_mode == 'token':
       if not all([file_token, field_id, record_id, self.table_id, self.sdk_client]):
@@ -207,6 +216,7 @@ class DownloadJobState:
           message='authorization download payload missing attachment identifiers.',
           order=order
         )
+        self.handler._monitor_file_status(file_key, 'failed', error='authorization payload missing identifiers')
         return
     elif not download_url:
       await self.handler._send_ack(
@@ -215,11 +225,13 @@ class DownloadJobState:
         message='missing downloadUrl or name',
         order=order
       )
+      self.handler._monitor_file_status(file_key, 'failed', error='missing download url')
       return
     success = False
     saved_path = None
     last_error: Optional[str] = None
     self.handler._monitor_download_started()
+    self.handler._monitor_file_status(file_key, 'downloading')
     for attempt in range(1, 4):
       try:
         target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
@@ -230,10 +242,11 @@ class DownloadJobState:
             field_id=field_id,
             record_id=record_id,
             file_token=file_token,
-            destination=target_path
+            destination=target_path,
+            file_key=file_key
           )
         else:
-          saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
+          saved_path = await self.handler._download_file(self.http_session, download_url, target_path, file_key=file_key)
         success = True
         break
       except ValueError as exc:
@@ -247,6 +260,7 @@ class DownloadJobState:
           continue
     self.handler._monitor_download_finished(success=success)
     if not success:
+      self.handler._monitor_file_status(file_key, 'failed', error=last_error or 'download failed')
       await self.handler._send_ack(
         websocket,
         status='error',
@@ -254,6 +268,7 @@ class DownloadJobState:
         order=order
       )
       return
+    self.handler._monitor_file_status(file_key, 'completed')
     await self.handler._send_ack(
       websocket,
       status='success',
@@ -383,7 +398,14 @@ class AttachmentDownloader:
     target.mkdir(parents=True, exist_ok=True)
     return target
 
-  async def _download_file(self, session: aiohttp.ClientSession, url: str, destination: Path) -> Path:
+  async def _download_file(
+    self,
+    session: aiohttp.ClientSession,
+    url: str,
+    destination: Path,
+    *,
+    file_key: str
+  ) -> Path:
     """使用 aiohttp 流式下载文件。"""
     destination.parent.mkdir(parents=True, exist_ok=True)
     logging.info('downloading %s -> %s', url, destination)
@@ -392,6 +414,7 @@ class AttachmentDownloader:
       with destination.open('wb') as file_obj:
         async for chunk in response.content.iter_chunked(128 * 1024):
           file_obj.write(chunk)
+          self._monitor_file_progress(file_key, len(chunk))
     logging.info('saved file to %s', destination)
     return destination
 
@@ -403,7 +426,8 @@ class AttachmentDownloader:
     field_id: str,
     record_id: str,
     file_token: str,
-    destination: Path
+    destination: Path,
+    file_key: str
   ) -> Path:
     """通过 BaseOpenSDK 使用授权码下载附件。"""
     if client is None or DownloadMediaRequest is None:
@@ -469,6 +493,7 @@ class AttachmentDownloader:
         try:
           with destination.open('wb') as file_obj:
             file_obj.write(file_content)
+          self._monitor_file_progress(file_key, len(file_content))
         except Exception as exc:  # noqa: BLE001
           logging.error('failed to write file %s: %s', destination, exc)
           continue
@@ -610,6 +635,33 @@ class AttachmentDownloader:
     """记录下载模式供桌面端展示。"""
     if self.monitor:
       self.monitor.set_mode(mode)
+
+  def _monitor_file_registered(self, key: str, *, name: str, size: int, path: str) -> None:
+    """登记文件信息供 UI 展示。"""
+    if self.monitor:
+      self.monitor.register_file(key, name=name, path=path, size=size)
+
+  def _monitor_file_progress(self, key: str, bytes_count: int) -> None:
+    """记录指定文件的字节进度。"""
+    if self.monitor:
+      self.monitor.update_file_progress(key, bytes_count)
+
+  def _monitor_file_status(self, key: str, status: str, *, error: Optional[str] = None) -> None:
+    """更新文件状态供 UI 展示。"""
+    if self.monitor:
+      self.monitor.mark_file_status(key, status, error=error)
+
+  def _build_file_key(self, order: Optional[Any], name: Optional[str], path: str, extra: Optional[Any]) -> str:
+    """组合一个稳定的文件标识符。"""
+    if order is not None:
+      return f'order-{order}'
+    if path:
+      return f'{path}-{name or "unknown"}'
+    if name:
+      return name
+    if extra is not None:
+      return str(extra)
+    return 'file'
 
 
 __all__ = [

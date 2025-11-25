@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -24,6 +24,7 @@ from .user_config import (
   CONFIG_FILE,
   DEFAULT_HOST,
   DEFAULT_OUTPUT_DIR,
+  DEFAULT_FILE_DISPLAY_LIMIT,
   UserPreferences,
   load_user_config,
   save_user_config
@@ -71,7 +72,9 @@ class DownloaderDesktopApp:
     self.language_code_map: Dict[str, str] = {label: code for label, code in SUPPORTED_LANGUAGES}
     self._status_state = 'idle'
     self._status_context: Dict[str, str] = {}
+    self.file_display_limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
     self._initial_language_code = self._normalize_language_code(self.user_preferences.language)
+    self.file_columns = ('name', 'status', 'progress', 'path')
     self._build_widgets()
     self._set_language(self._initial_language_code)
     self._schedule_log_polling()
@@ -141,6 +144,31 @@ class DownloaderDesktopApp:
     self.stats_frame.columnconfigure(1, weight=1)
     self.stats_frame.columnconfigure(2, weight=1)
 
+    self.progress_frame = ttk.LabelFrame(main_frame, text='', padding=12)
+    self.progress_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+    self.total_progress_var = tk.StringVar(value='')
+    self.total_progress_label = ttk.Label(self.progress_frame, textvariable=self.total_progress_var)
+    self.total_progress_label.pack(anchor=tk.W)
+    self.total_progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', maximum=100)
+    self.total_progress_bar.pack(fill=tk.X, pady=(4, 8))
+    table_container = ttk.Frame(self.progress_frame)
+    table_container.pack(fill=tk.BOTH, expand=True)
+    self.file_tree = ttk.Treeview(
+      table_container,
+      columns=self.file_columns,
+      show='headings',
+      height=8,
+      selectmode='browse'
+    )
+    self.file_tree.column('name', anchor=tk.W, width=220)
+    self.file_tree.column('status', anchor=tk.W, width=140)
+    self.file_tree.column('progress', anchor=tk.CENTER, width=80)
+    self.file_tree.column('path', anchor=tk.W, width=220)
+    self.file_tree_scrollbar = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.file_tree.yview)
+    self.file_tree.configure(yscrollcommand=self.file_tree_scrollbar.set)
+    self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    self.file_tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
     self.advanced_visible = False
     self.advanced_button = ttk.Button(main_frame, text='', command=self._toggle_advanced)
     self.advanced_button.pack(fill=tk.X, pady=(8, 0))
@@ -159,8 +187,15 @@ class DownloaderDesktopApp:
     port_entry.grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
     port_entry.bind('<FocusOut>', self._on_port_commit)
     port_entry.bind('<Return>', self._on_port_commit)
+    self.file_limit_label = ttk.Label(self.advanced_frame, text='')
+    self.file_limit_label.grid(row=2, column=0, sticky=tk.W, padx=4, pady=4)
+    self.file_limit_var = tk.StringVar(value=str(self.file_display_limit))
+    file_limit_entry = ttk.Entry(self.advanced_frame, textvariable=self.file_limit_var, width=10)
+    file_limit_entry.grid(row=2, column=1, sticky=tk.W, padx=4, pady=4)
+    file_limit_entry.bind('<FocusOut>', self._on_file_limit_commit)
+    file_limit_entry.bind('<Return>', self._on_file_limit_commit)
     self.advanced_tip = ttk.Label(self.advanced_frame, text='', wraplength=360)
-    self.advanced_tip.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 0))
+    self.advanced_tip.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 0))
     self.advanced_frame.columnconfigure(1, weight=1)
 
     button_frame = ttk.Frame(main_frame, padding=(0, 12))
@@ -231,6 +266,22 @@ class DownloaderDesktopApp:
       return
     self._update_user_preferences(port=port)
 
+  def _on_file_limit_commit(self, _event=None) -> None:
+    """在高级设置中调整文件展示数量。"""
+    value = (self.file_limit_var.get() or '').strip()
+    try:
+      limit = int(value)
+    except ValueError:
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_invalid_file_limit'))
+      self.file_limit_var.set(str(self.file_display_limit))
+      return
+    if limit < 100 or limit > 5000:
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_invalid_file_limit'))
+      self.file_limit_var.set(str(self.file_display_limit))
+      return
+    self.file_display_limit = limit
+    self._update_user_preferences(file_display_limit=limit)
+
   def _on_personal_token_commit(self, _event=None) -> None:
     """在授权码输入框失焦或回车时保存值。"""
     token = self.personal_token_var.get().strip()
@@ -241,6 +292,7 @@ class DownloaderDesktopApp:
     """合并偏好修改并写入配置文件。"""
     for key, value in changes.items():
       setattr(self.user_preferences, key, value)
+    self.file_display_limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
     self._save_user_preferences()
 
   def _apply_personal_token_change(self, token: str) -> None:
@@ -344,6 +396,41 @@ class DownloaderDesktopApp:
     self.current_var.set(self._t('stat_current', count=snapshot['active']))
     self.completed_var.set(self._t('stat_completed', count=snapshot['completed']))
     self.pending_var.set(self._t('stat_pending', count=snapshot['pending']))
+    overall = snapshot.get('overall') or {}
+    percent = float(overall.get('percent', 0.0) or 0.0)
+    finished = overall.get('finished', 0)
+    total = overall.get('total', 0)
+    self.total_progress_var.set(self._t('overall_progress', percent=f'{percent:.0f}%', finished=finished, total=total))
+    self.total_progress_bar['value'] = percent
+    self._refresh_file_table(snapshot.get('files') or [])
+
+  def _refresh_file_table(self, files: List[Dict[str, object]]) -> None:
+    """在表格中渲染单个文件的进度。"""
+    limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
+    visible_files = files[-limit:]
+    for item in self.file_tree.get_children():
+      self.file_tree.delete(item)
+    for entry in visible_files:
+      status_key = f"file_status_{entry.get('status', 'pending')}"
+      status_label = self._t(status_key)
+      error = entry.get('error')
+      if error:
+        status_label = f"{status_label} ({error})"
+      progress_value = float(entry.get('percent', 0.0) or 0.0)
+      progress_text = f"{progress_value:.0f}%"
+      self.file_tree.insert(
+        '',
+        tk.END,
+        iid=str(entry.get('key', '')),
+        values=(
+          entry.get('name', ''),
+          status_label,
+          progress_text,
+          entry.get('path', '')
+        )
+      )
+    if visible_files:
+      self.file_tree.yview_moveto(1.0)
 
   def _parse_port_value(self, value: str) -> int:
     """校验端口输入并返回整数。"""
@@ -474,6 +561,12 @@ class DownloaderDesktopApp:
     self.advanced_tip.config(text=self._t('advanced_settings_desc'))
     self.personal_token_label.config(text=self._t('personal_token') + ':')
     self.personal_token_hint.config(text=self._t('personal_token_hint'))
+    self.progress_frame.config(text=self._t('files_title'))
+    self.file_limit_label.config(text=self._t('file_limit_label') + ':')
+    self.file_tree.heading('name', text=self._t('file_column_name'))
+    self.file_tree.heading('status', text=self._t('file_column_status'))
+    self.file_tree.heading('progress', text=self._t('file_column_progress'))
+    self.file_tree.heading('path', text=self._t('file_column_path'))
     self._update_advanced_visibility()
     self._update_log_visibility()
     self._refresh_stats()

@@ -26,9 +26,9 @@ const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
 class TokenDispatcher {
   /**
-   * 控制鉴权码推送速率，默认 1 秒最多 5 次。
+   * 控制鉴权码推送速率，默认 1 秒最多 50 次。
    */
-  constructor(limit = 5, windowMs = 1000) {
+  constructor(limit = 50, windowMs = 1000) {
     this.limit = limit
     this.windowMs = windowMs
     this.timeline = []
