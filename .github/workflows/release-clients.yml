@@ -66,8 +66,8 @@ jobs:
               curl -L "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${UPX_ARCHIVE}" -o "${UPX_ROOT}/${UPX_ARCHIVE}"
               tar -C "${UPX_ROOT}" -xf "${UPX_ROOT}/${UPX_ARCHIVE}"
               export UPX_DIR="${UPX_ROOT}/upx-${UPX_VERSION}-${UPX_PKG_ARCH}"
-              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
-              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
+              pyinstaller ${CLI_ENTRY} --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
+              pyinstaller ${DESKTOP_ENTRY} --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
               mkdir -p artifacts
               mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
               mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
@@ -114,10 +114,10 @@ jobs:
           "UPX_DIR=$upxDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build CLI
-        run: pyinstaller $env:CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales;python_app/locales --upx-dir "$env:UPX_DIR" --name feishu-downloader-cli
+        run: pyinstaller $env:CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data="python_app/locales;python_app/locales" --upx-dir "$env:UPX_DIR" --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $env:DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales;python_app/locales --upx-dir "$env:UPX_DIR" --name feishu-downloader-desktop
+        run: pyinstaller $env:DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data="python_app/locales;python_app/locales" --upx-dir "$env:UPX_DIR" --name feishu-downloader-desktop
 
       - name: Prepare artifacts
         run: |
@@ -162,10 +162,10 @@ jobs:
         run: echo "UPX_DIR=$(dirname $(command -v upx))" >> $GITHUB_ENV
 
       - name: Build CLI
-        run: pyinstaller $CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
+        run: pyinstaller $CLI_ENTRY --paths . --onefile --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-cli
 
       - name: Build Desktop
-        run: pyinstaller $DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
+        run: pyinstaller $DESKTOP_ENTRY --paths . --onefile --windowed --noconfirm --collect-all python_app --collect-data python_app.locales --add-data=python_app/locales:python_app/locales --upx-dir "${UPX_DIR}" --name feishu-downloader-desktop
 
       - name: Prepare artifacts
         run: |
