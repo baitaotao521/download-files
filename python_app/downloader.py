@@ -93,6 +93,7 @@ class DownloadJobState:
     """根据前端传入信息记录下载模式。"""
     requested_mode = str(data.get('downloadMode') or 'url').lower()
     self.download_mode = requested_mode if requested_mode in ('url', 'token') else 'url'
+    self.handler._monitor_download_mode(self.download_mode)
     if self.download_mode != 'token':
       return
     app_token = str(data.get('appToken') or '').strip()
@@ -216,40 +217,43 @@ class DownloadJobState:
       )
       return
     success = False
+    saved_path = None
+    last_error: Optional[str] = None
     self.handler._monitor_download_started()
-    try:
-      target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
-      if self.download_mode == 'token':
-        saved_path = await self.handler._download_file_with_token(
-          self.sdk_client,
-          table_id=self.table_id,
-          field_id=field_id,
-          record_id=record_id,
-          file_token=file_token,
-          destination=target_path
-        )
-      else:
-        saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
-      success = True
-    except ValueError as exc:
+    for attempt in range(1, 4):
+      try:
+        target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
+        if self.download_mode == 'token':
+          saved_path = await self.handler._download_file_with_token(
+            self.sdk_client,
+            table_id=self.table_id,
+            field_id=field_id,
+            record_id=record_id,
+            file_token=file_token,
+            destination=target_path
+          )
+        else:
+          saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
+        success = True
+        break
+      except ValueError as exc:
+        last_error = str(exc)
+        break
+      except Exception as exc:  # noqa: BLE001
+        last_error = str(exc)
+        logging.exception('download failed for %s (attempt %s/3)', file_name, attempt)
+        if attempt < 3:
+          await asyncio.sleep(0.5)
+          continue
+    self.handler._monitor_download_finished(success=success)
+    if not success:
       await self.handler._send_ack(
         websocket,
         status='error',
-        message=str(exc),
+        message=f'download failed after 3 attempts: {last_error}',
         order=order
       )
       return
-    except Exception as exc:  # noqa: BLE001
-      logging.exception('download failed for %s', file_name)
-      await self.handler._send_ack(
-        websocket,
-        status='error',
-        message=str(exc),
-        order=order
-      )
-      return
-    finally:
-      self.handler._monitor_download_finished(success=success)
     await self.handler._send_ack(
       websocket,
       status='success',
@@ -601,6 +605,11 @@ class AttachmentDownloader:
     """通知任务阶段结束。"""
     if self.monitor:
       self.monitor.job_finished()
+
+  def _monitor_download_mode(self, mode: str) -> None:
+    """记录下载模式供桌面端展示。"""
+    if self.monitor:
+      self.monitor.set_mode(mode)
 
 
 __all__ = [

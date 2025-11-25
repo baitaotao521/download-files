@@ -17,6 +17,7 @@ class DownloadMonitor:
   _total: int = 0
   _completed: int = 0
   _active: int = 0
+  _mode: str = 'url'
 
   def set_connection(self, connected: bool) -> None:
     """记录当前是否有前端连接。"""
@@ -26,6 +27,13 @@ class DownloadMonitor:
         self._total = 0
         self._completed = 0
         self._active = 0
+        self._mode = 'url'
+
+  def set_mode(self, mode: str) -> None:
+    """记录当前下载模式（url / token）。"""
+    normalized = mode if mode in ('url', 'token') else 'url'
+    with self._lock:
+      self._mode = normalized
 
   def start_job(self, total: int) -> None:
     """当收到新的 Job 配置时重置统计。"""
@@ -61,5 +69,6 @@ class DownloadMonitor:
         'total': self._total,
         'completed': self._completed,
         'active': self._active,
-        'pending': pending
+        'pending': pending,
+        'mode': self._mode
       }

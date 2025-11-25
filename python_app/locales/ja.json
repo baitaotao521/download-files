@@ -19,6 +19,9 @@
   "btn_open_config": "設定ファイルを開く",
   "stat_connection_connected": "接続状態：接続中",
   "stat_connection_disconnected": "接続状態：未接続",
+  "stat_mode": "ダウンロードモード：{mode}",
+  "mode_client": "クライアント",
+  "mode_client_token": "クライアント（認証コード）",
   "stat_current": "ダウンロード中：{count}",
   "stat_completed": "完了：{count}",
   "stat_pending": "残り：{count}",
@@ -44,5 +47,8 @@
   "msg_exit_running": "サービスが稼働中です。停止して終了しますか？",
   "language_option_zh": "简体中文",
   "language_option_en": "English",
-  "language_option_ja": "日本語"
+  "language_option_ja": "日本語",
+  "language_option_zh_tw": "繁體中文",
+  "language_option_es": "Español",
+  "language_option_ru": "Русский"
 }

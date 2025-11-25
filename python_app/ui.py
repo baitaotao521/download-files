@@ -16,7 +16,7 @@ from typing import Dict, Optional
 from dotenv import load_dotenv, find_dotenv
 
 from .config import ServerConfig
-from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES
+from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES, normalize_locale
 from .logging_utils import configure_logging
 from .monitor import DownloadMonitor
 from .websocket_server import WebSocketDownloadServer
@@ -128,10 +128,12 @@ class DownloaderDesktopApp:
     self.stats_frame = ttk.LabelFrame(main_frame, text='', padding=12)
     self.stats_frame.pack(fill=tk.X, expand=False, pady=(8, 0))
     self.connection_var = tk.StringVar(value='')
+    self.mode_var = tk.StringVar(value='')
     self.current_var = tk.StringVar(value='0')
     self.completed_var = tk.StringVar(value='0')
     self.pending_var = tk.StringVar(value='0')
     ttk.Label(self.stats_frame, textvariable=self.connection_var).grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.mode_var).grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
     ttk.Label(self.stats_frame, textvariable=self.current_var).grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
     ttk.Label(self.stats_frame, textvariable=self.completed_var).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
     ttk.Label(self.stats_frame, textvariable=self.pending_var).grid(row=1, column=2, sticky=tk.W, padx=4, pady=4)
@@ -337,6 +339,8 @@ class DownloaderDesktopApp:
     snapshot = self.monitor.snapshot()
     connection_key = 'stat_connection_connected' if snapshot['connected'] else 'stat_connection_disconnected'
     self.connection_var.set(self._t(connection_key))
+    mode_key = 'mode_client_token' if snapshot.get('mode') == 'token' else 'mode_client'
+    self.mode_var.set(self._t('stat_mode', mode=self._t(mode_key)))
     self.current_var.set(self._t('stat_current', count=snapshot['active']))
     self.completed_var.set(self._t('stat_completed', count=snapshot['completed']))
     self.pending_var.set(self._t('stat_pending', count=snapshot['pending']))
@@ -439,9 +443,10 @@ class DownloaderDesktopApp:
     self._apply_translations()
 
   def _normalize_language_code(self, code: Optional[str]) -> str:
-    """确保语言代码在支持列表中。"""
-    if code in self.language_label_map:
-      return code
+    """确保语言代码落在支持范围内，并兼容区域化代码。"""
+    normalized = normalize_locale(code or DEFAULT_LANGUAGE)
+    if normalized in self.language_label_map:
+      return normalized
     return DEFAULT_LANGUAGE
 
   def _on_language_change(self, _event) -> None:

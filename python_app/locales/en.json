@@ -19,6 +19,9 @@
   "btn_open_config": "Open Config File",
   "stat_connection_connected": "Connection: Connected",
   "stat_connection_disconnected": "Connection: Disconnected",
+  "stat_mode": "Download Mode: {mode}",
+  "mode_client": "Local client",
+  "mode_client_token": "Local client (auth code)",
   "stat_current": "Downloading: {count}",
   "stat_completed": "Completed: {count}",
   "stat_pending": "Pending: {count}",
@@ -44,5 +47,8 @@
   "msg_exit_running": "Server is running. Stop and exit?",
   "language_option_zh": "简体中文",
   "language_option_en": "English",
-  "language_option_ja": "日本語"
+  "language_option_ja": "日本語",
+  "language_option_zh_tw": "繁體中文",
+  "language_option_es": "Español",
+  "language_option_ru": "Русский"
 }

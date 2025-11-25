@@ -19,6 +19,9 @@
   "btn_open_config": "打开配置文件",
   "stat_connection_connected": "连接状态：已连接",
   "stat_connection_disconnected": "连接状态：未连接",
+  "stat_mode": "下载模式：{mode}",
+  "mode_client": "客户端",
+  "mode_client_token": "客户端（授权码）",
   "stat_current": "当前下载：{count}",
   "stat_completed": "已完成：{count}",
   "stat_pending": "待下载：{count}",
@@ -44,5 +47,8 @@
   "msg_exit_running": "服务仍在运行，确定停止并退出吗？",
   "language_option_zh": "简体中文",
   "language_option_en": "English",
-  "language_option_ja": "日本語"
+  "language_option_ja": "日本語",
+  "language_option_zh_tw": "繁體中文",
+  "language_option_es": "Español",
+  "language_option_ru": "Русский"
 }
