@@ -24,6 +24,7 @@ class UserPreferences:
   port: int = DEFAULT_PORT
   output_dir: str = DEFAULT_OUTPUT_DIR
   language: str = DEFAULT_LANGUAGE
+  personal_base_token: str = ''
 
 
 def _coerce_port(value: Any) -> int:
@@ -48,7 +49,14 @@ def load_user_config() -> UserPreferences:
   port = _coerce_port(data.get('port'))
   output_dir = str(data.get('output_dir') or DEFAULT_OUTPUT_DIR)
   language = str(data.get('language') or DEFAULT_LANGUAGE)
-  return UserPreferences(host=host, port=port, output_dir=output_dir, language=language)
+  personal_base_token = str(data.get('personal_base_token') or '')
+  return UserPreferences(
+    host=host,
+    port=port,
+    output_dir=output_dir,
+    language=language,
+    personal_base_token=personal_base_token
+  )
 
 
 def save_user_config(preferences: UserPreferences) -> None:

@@ -117,11 +117,14 @@ const getFailedIdsLength = computed(() => {
   return failedIds.value.size
 })
 
+const MAX_VISIBLE_ITEMS = 30
 const filteredFileInfo = computed(() => {
-  if (showFailedOnly.value) {
-    return fileInfo.value.filter(item => failedIds.value.has(item.index))
-  }
-  return fileInfo.value
+  const baseList = showFailedOnly.value
+    ? fileInfo.value.filter(item => failedIds.value.has(item.index))
+    : fileInfo.value
+  const activeList = baseList.filter(item => item.type !== 'success')
+  const candidates = activeList.length ? activeList : baseList
+  return candidates.slice(0, MAX_VISIBLE_ITEMS)
 })
 
 const percent = computed(() => {

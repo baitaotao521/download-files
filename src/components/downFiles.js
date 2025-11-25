@@ -42,7 +42,13 @@ class FileDownloader {
    * 判断当前是否需要通过 WebSocket 推送文件链接。
    */
   isWebSocketChannel() {
-    return this.downloadChannel === 'websocket'
+    return this.downloadChannel === 'websocket' || this.downloadChannel === 'websocket_auth'
+  }
+  /**
+   * 判断当前 WebSocket 模式是否走授权码下载流程。
+   */
+  isTokenWebSocketChannel() {
+    return this.downloadChannel === 'websocket_auth'
   }
   async loopGetRecordIdList(list = [], pageToken) {
     const params = {
@@ -271,6 +277,10 @@ class FileDownloader {
     const completion = this._bindWebSocketLifecycle(socket)
     const jobId = `${Date.now()}`
     const concurrency = Math.max(1, Number(this.concurrentDownloads) || 5)
+    const useTokenMode = this.isTokenWebSocketChannel()
+    if (useTokenMode && !this.appToken) {
+      throw new Error($t('error_app_token_missing'))
+    }
     try {
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_CONFIG_TYPE,
@@ -280,7 +290,14 @@ class FileDownloader {
           jobId,
           jobName: this.zipName || jobId,
           zipName: this.zipName || jobId,
-          total: this.cellList.length
+          total: this.cellList.length,
+          downloadMode: useTokenMode ? 'token' : 'url',
+          ...(useTokenMode
+            ? {
+                tableId: this.tableId,
+                appToken: this.appToken
+              }
+            : {})
         }
       })
       // 并行预取附件链接，避免串行等待造成阻塞
@@ -289,22 +306,31 @@ class FileDownloader {
         return async() => {
           const { order } = fileInfo
           try {
-            await this.getAttachmentUrl(fileInfo)
+            if (!useTokenMode) {
+              await this.getAttachmentUrl(fileInfo)
+            }
             this.emit('progress', {
               index: order,
               name: fileInfo.name,
               size: fileInfo.size,
               percentage: 0
             })
+            const payload = {
+              name: fileInfo.name,
+              path: fileInfo.path,
+              order: fileInfo.order,
+              size: fileInfo.size
+            }
+            if (useTokenMode) {
+              payload.token = fileInfo.token
+              payload.fieldId = fileInfo.fieldId
+              payload.recordId = fileInfo.recordId
+            } else {
+              payload.downloadUrl = fileInfo.fileUrl
+            }
             this._sendWebSocketMessage(socket, {
               type: WEBSOCKET_LINK_TYPE,
-              data: {
-                downloadUrl: fileInfo.fileUrl,
-                name: fileInfo.name,
-                path: fileInfo.path,
-                order: fileInfo.order,
-                size: fileInfo.size
-              }
+              data: payload
             })
           } catch (error) {
             const message = error?.message || $t('file_download_failed')

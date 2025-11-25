@@ -47,6 +47,13 @@ python scripts/ws_desktop.py
 2. 展开“高级设置”后填写 Python 服务监听的主机和端口（默认为 `127.0.0.1:11548`）。
 3. 点击下载后，前端会通过 WebSocket 依次推送附件临时链接，由本地 Python 端负责落地保存/打包。
 
+### 授权码 + 本地客户端下载模式
+
+新增的“本地客户端下载（授权码）”会将附件 token、字段与记录信息发送给桌面端，由 Python 通过 Base OpenSDK 拉取文件：
+
+1. 确保执行 `pip install -r scripts/requirements.txt` 安装 `baseopensdk` 及 `python-dotenv`，并在 `.env` 或桌面程序的高级设置中填入 `PERSONAL_BASE_TOKEN`。
+2. 前端选择该下载方式后，会自动携带当前 Base 的 `appToken` 与数据表 ID。若桌面端未配置授权码，将返回明确错误并拒绝执行下载。
+
 ---
 
 插件在下载过程中会按以下顺序向 Python 服务推送 JSON：

@@ -13,6 +13,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, Optional
 
+from dotenv import load_dotenv, find_dotenv
+
 from .config import ServerConfig
 from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES
 from .monitor import DownloadMonitor
@@ -26,7 +28,9 @@ from .user_config import (
   save_user_config
 )
 
-DEFAULT_PYTHON_CONCURRENCY = 5
+load_dotenv(find_dotenv(), override=False)
+
+DEFAULT_PYTHON_CONCURRENCY = 20
 
 
 class GuiLogHandler(logging.Handler):
@@ -107,6 +111,16 @@ class DownloaderDesktopApp:
     self.browse_button.grid(row=0, column=3, sticky=tk.W, padx=4, pady=4)
     self.open_output_button = ttk.Button(self.form_frame, text='', command=self._open_output_dir)
     self.open_output_button.grid(row=0, column=4, sticky=tk.W, padx=4, pady=4)
+    initial_token = self.user_preferences.personal_base_token or os.environ.get('PERSONAL_BASE_TOKEN', '')
+    self.personal_token_label = ttk.Label(self.form_frame, text='')
+    self.personal_token_label.grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
+    self.personal_token_var = tk.StringVar(value=initial_token)
+    personal_token_entry = ttk.Entry(self.form_frame, textvariable=self.personal_token_var, width=40, show='*')
+    personal_token_entry.grid(row=1, column=1, columnspan=3, sticky=tk.W + tk.E, padx=4, pady=4)
+    personal_token_entry.bind('<FocusOut>', self._on_personal_token_commit)
+    personal_token_entry.bind('<Return>', self._on_personal_token_commit)
+    self.personal_token_hint = ttk.Label(self.form_frame, text='', wraplength=420, foreground='#666666')
+    self.personal_token_hint.grid(row=2, column=1, columnspan=3, sticky=tk.W, padx=4, pady=(0, 8))
     self.form_frame.columnconfigure(1, weight=1)
     self.form_frame.columnconfigure(2, weight=1)
 
@@ -175,11 +189,11 @@ class DownloaderDesktopApp:
     if selected:
       self.output_var.set(selected)
       self._apply_output_dir_change()
-  
+
   def _on_output_dir_commit(self, _event=None) -> None:
     """处理输入框失焦或回车事件，应用新的目录。"""
     self._apply_output_dir_change()
-  
+
   def _apply_output_dir_change(self) -> None:
     """将最新的保存目录同步到运行中的服务。"""
     new_dir = self.output_var.get().strip()
@@ -197,13 +211,13 @@ class DownloaderDesktopApp:
         self._t('dialog_error_title'),
         self._t('msg_output_dir_failed', error=str(exc))
       )
-  
+
   def _on_host_commit(self, _event=None) -> None:
     """在主机输入框失焦或回车时保存配置。"""
     host = self.host_var.get().strip() or DEFAULT_HOST
     self.host_var.set(host)
     self._update_user_preferences(host=host)
-  
+
   def _on_port_commit(self, _event=None) -> None:
     """在端口输入框失焦或回车时校验并保存。"""
     try:
@@ -213,13 +227,34 @@ class DownloaderDesktopApp:
       self.port_var.set(str(self.user_preferences.port))
       return
     self._update_user_preferences(port=port)
-  
+
+  def _on_personal_token_commit(self, _event=None) -> None:
+    """在授权码输入框失焦或回车时保存值。"""
+    token = self.personal_token_var.get().strip()
+    self._update_user_preferences(personal_base_token=token)
+    self._apply_personal_token_change(token)
+
   def _update_user_preferences(self, **changes) -> None:
     """合并偏好修改并写入配置文件。"""
     for key, value in changes.items():
       setattr(self.user_preferences, key, value)
     self._save_user_preferences()
-  
+
+  def _apply_personal_token_change(self, token: str) -> None:
+    """将授权码变更同步至运行中的服务。"""
+    if not self.server or not self.server.is_running:
+      return
+    normalized = token.strip()
+    try:
+      self.server.update_personal_token(normalized or None)
+      logging.info('personal base token updated')
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to update personal token')
+      messagebox.showerror(
+        self._t('dialog_error_title'),
+        self._t('msg_personal_token_failed', error=str(exc))
+      )
+
   def _save_user_preferences(self) -> None:
     """安全地保存用户配置。"""
     try:
@@ -248,7 +283,7 @@ class DownloaderDesktopApp:
     """切换日志面板显示。"""
     self.log_visible = not self.log_visible
     self._update_log_visibility()
-  
+
   def _open_output_dir(self) -> None:
     """打开当前保存目录。"""
     output_path = self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR
@@ -264,7 +299,7 @@ class DownloaderDesktopApp:
     except Exception as exc:  # noqa: BLE001
       logging.exception('failed to open output directory')
       messagebox.showerror(self._t('dialog_error_title'), self._t('msg_open_output_failed', error=str(exc)))
-  
+
   def _open_config_folder(self) -> None:
     """通过系统默认程序打开配置文件所在目录。"""
     try:
@@ -314,18 +349,20 @@ class DownloaderDesktopApp:
     if not 1 <= port <= 65535:
       raise ValueError(self._t('msg_invalid_port'))
     return port
-  
+
   def _build_config(self) -> ServerConfig:
     """根据界面输入构造 ServerConfig。"""
     port = self._parse_port_value(self.port_var.get())
     host = self.host_var.get().strip() or '127.0.0.1'
     output_dir = self.output_var.get().strip() or 'downloads'
-    self._update_user_preferences(host=host, port=port, output_dir=output_dir)
+    personal_token = self.personal_token_var.get().strip()
+    self._update_user_preferences(host=host, port=port, output_dir=output_dir, personal_base_token=personal_token)
     return ServerConfig(
       host=host,
       port=port,
       output_dir=output_dir,
-      download_concurrency=DEFAULT_PYTHON_CONCURRENCY
+      download_concurrency=DEFAULT_PYTHON_CONCURRENCY,
+      personal_base_token=personal_token
     )
 
   def _start_server(self, auto: bool = False) -> None:
@@ -399,7 +436,7 @@ class DownloaderDesktopApp:
     if self.language_combo.get() != label:
       self.language_combo.set(label)
     self._apply_translations()
-  
+
   def _normalize_language_code(self, code: Optional[str]) -> str:
     """确保语言代码在支持列表中。"""
     if code in self.language_label_map:
@@ -429,6 +466,8 @@ class DownloaderDesktopApp:
     self.log_frame.config(text=self._t('logs'))
     self.advanced_frame.config(text=self._t('advanced_settings'))
     self.advanced_tip.config(text=self._t('advanced_settings_desc'))
+    self.personal_token_label.config(text=self._t('personal_token') + ':')
+    self.personal_token_hint.config(text=self._t('personal_token_hint'))
     self._update_advanced_visibility()
     self._update_log_visibility()
     self._refresh_stats()

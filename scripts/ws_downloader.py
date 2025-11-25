@@ -4,8 +4,11 @@
 """
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv, find_dotenv
 
 
 def _resolve_base_dir() -> Path:
@@ -18,6 +21,8 @@ def _resolve_base_dir() -> Path:
 ROOT_DIR = _resolve_base_dir()
 if str(ROOT_DIR) not in sys.path:
   sys.path.insert(0, str(ROOT_DIR))
+
+load_dotenv(find_dotenv(), override=False)
 
 from python_app.config import ServerConfig
 from python_app.server import configure_logging, run_server_forever
@@ -43,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     default=5,
     help='Python 端下载并发数 (默认: 5)'
   )
+  parser.add_argument(
+    '--personal-base-token',
+    default=None,
+    help='可选：用于授权码下载模式的 Personal Base Token'
+  )
   return parser.parse_args()
 
 
@@ -50,12 +60,14 @@ def main() -> None:
   """脚本入口：配置日志、构建配置并启动服务。"""
   args = parse_args()
   configure_logging(args.log_level)
+  personal_token = args.personal_base_token or os.environ.get('PERSONAL_BASE_TOKEN')
   config = ServerConfig(
     host=args.host,
     port=args.port,
     output_dir=Path(args.output),
     log_level=args.log_level,
-    download_concurrency=args.download_concurrency
+    download_concurrency=args.download_concurrency,
+    personal_base_token=personal_token
   )
   try:
     asyncio.run(run_server_forever(config))
