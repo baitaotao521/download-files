@@ -37,12 +37,19 @@ class FileDownloader {
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
+    this._tokenPushTimeline = []
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
    */
   isWebSocketChannel() {
-    return this.downloadChannel === 'websocket'
+    return this.downloadChannel === 'websocket' || this.downloadChannel === 'websocket_auth'
+  }
+  /**
+   * 判断当前 WebSocket 模式是否走授权码下载流程。
+   */
+  isTokenWebSocketChannel() {
+    return this.downloadChannel === 'websocket_auth'
   }
   async loopGetRecordIdList(list = [], pageToken) {
     const params = {
@@ -268,9 +275,26 @@ class FileDownloader {
   async websocketDownload() {
     const wsUrl = this._buildWebSocketUrl()
     const socket = await this._createWebSocket(wsUrl)
-    const completion = this._bindWebSocketLifecycle(socket)
+    let abortDownloads = false
+    let abortReason = null
+    let superTask = null
+    const stopAllDownloads = (reason) => {
+      if (abortDownloads) return
+      abortDownloads = true
+      abortReason = reason instanceof Error ? reason : new Error(reason || $t('file_download_failed'))
+      if (superTask) {
+        superTask.cancel(abortReason)
+      }
+    }
+    const completion = this._bindWebSocketLifecycle(socket, {
+      onFatalError: stopAllDownloads
+    })
     const jobId = `${Date.now()}`
     const concurrency = Math.max(1, Number(this.concurrentDownloads) || 5)
+    const useTokenMode = this.isTokenWebSocketChannel()
+    if (useTokenMode && !this.appToken) {
+      throw new Error($t('error_app_token_missing'))
+    }
     try {
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_CONFIG_TYPE,
@@ -280,45 +304,83 @@ class FileDownloader {
           jobId,
           jobName: this.zipName || jobId,
           zipName: this.zipName || jobId,
-          total: this.cellList.length
+          total: this.cellList.length,
+          downloadMode: useTokenMode ? 'token' : 'url',
+          ...(useTokenMode
+            ? {
+                tableId: this.tableId,
+                appToken: this.appToken
+              }
+            : {})
         }
       })
-      for (const fileInfo of this.cellList) {
-        const { order } = fileInfo
-        try {
-          await this.getAttachmentUrl(fileInfo)
-          this.emit('progress', {
-            index: order,
-            name: fileInfo.name,
-            size: fileInfo.size,
-            percentage: 0
-          })
-          this._sendWebSocketMessage(socket, {
-            type: WEBSOCKET_LINK_TYPE,
-            data: {
-              downloadUrl: fileInfo.fileUrl,
+      // 并行预取附件链接，避免串行等待造成阻塞
+      superTask = new SuperTask(concurrency)
+      if (abortDownloads) {
+        superTask.cancel(abortReason || new Error($t('file_download_failed')))
+        await completion.catch(() => {})
+        return
+      }
+      const tasks = this.cellList.map((fileInfo) => {
+        return async() => {
+          if (abortDownloads) return
+          const { order } = fileInfo
+          try {
+            if (!useTokenMode) {
+              await this.getAttachmentUrl(fileInfo)
+            }
+            if (abortDownloads) return
+            this.emit('progress', {
+              index: order,
+              name: fileInfo.name,
+              size: fileInfo.size,
+              percentage: 0
+            })
+            const payload = {
               name: fileInfo.name,
               path: fileInfo.path,
               order: fileInfo.order,
               size: fileInfo.size
             }
-          })
-        } catch (error) {
-          const message = error?.message || $t('file_download_failed')
-          this.emit('error', {
-            index: order,
-            message
-          })
-          continue
-        }
-      }
-      this._sendWebSocketMessage(socket, {
-        type: WEBSOCKET_COMPLETE_TYPE,
-        data: {
-          jobId
+            if (useTokenMode) {
+              payload.token = fileInfo.token
+              payload.fieldId = fileInfo.fieldId
+              payload.recordId = fileInfo.recordId
+            } else {
+              payload.downloadUrl = fileInfo.fileUrl
+            }
+            if (abortDownloads) return
+            if (useTokenMode) {
+              await this._acquireTokenModeSlot(() => abortDownloads)
+            }
+            if (abortDownloads) return
+            this._sendWebSocketMessage(socket, {
+              type: WEBSOCKET_LINK_TYPE,
+              data: payload
+            })
+          } catch (error) {
+            const message = error?.message || $t('file_download_failed')
+            this.emit('error', {
+              index: order,
+              message
+            })
+            throw error
+          }
         }
       })
-      await completion
+      superTask.setTasks(tasks)
+      await superTask.finished().catch(() => {})
+      if (!abortDownloads) {
+        this._sendWebSocketMessage(socket, {
+          type: WEBSOCKET_COMPLETE_TYPE,
+          data: {
+            jobId
+          }
+        })
+        await completion
+      } else {
+        await completion.catch(() => {})
+      }
     } finally {
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close()
@@ -365,10 +427,19 @@ class FileDownloader {
   /**
    * 监听服务端 ACK，驱动 UI 并在任务完成或失败时结束。
    */
-  _bindWebSocketLifecycle(socket) {
+  _bindWebSocketLifecycle(socket, hooks = {}) {
     return new Promise((resolve, reject) => {
       let finished = false
       let hasJobCompleted = false
+      const notifyFatal = (error) => {
+        if (typeof hooks.onFatalError === 'function') {
+          try {
+            hooks.onFatalError(error)
+          } catch (err) {
+            console.error('onFatalError hook failed', err)
+          }
+        }
+      }
       const finish = (error) => {
         if (finished) return
         finished = true
@@ -400,6 +471,8 @@ class FileDownloader {
                 index: order,
                 message: data.message || $t('file_download_failed')
               })
+              notifyFatal(data.message || $t('file_download_failed'))
+              finish(new Error(data.message || $t('file_download_failed')))
             }
             return
           }
@@ -423,6 +496,7 @@ class FileDownloader {
           if (status === 'error') {
             const message = data.message || $t('file_download_failed')
             this.emit('warn', message)
+            notifyFatal(message)
             finish(new Error(message))
           }
         } catch (error) {
@@ -430,12 +504,14 @@ class FileDownloader {
         }
       }
       socket.onerror = () => {
+        notifyFatal($t('websocket_connection_failed'))
         finish(new Error($t('websocket_connection_failed')))
       }
       socket.onclose = () => {
         if (hasJobCompleted) {
           finish()
         } else {
+          notifyFatal($t('websocket_connection_failed'))
           finish(new Error($t('websocket_connection_failed')))
         }
       }
@@ -449,6 +525,29 @@ class FileDownloader {
       throw new Error($t('websocket_connection_failed'))
     }
     socket.send(JSON.stringify(payload))
+  }
+
+  async _acquireTokenModeSlot(shouldAbort) {
+    const limit = 5
+    const windowMs = 1000
+    if (!this._tokenPushTimeline) {
+      this._tokenPushTimeline = []
+    }
+    while (true) {
+      if (typeof shouldAbort === 'function' && shouldAbort()) {
+        return
+      }
+      const now = Date.now()
+      this._tokenPushTimeline = this._tokenPushTimeline.filter(
+        (timestamp) => now - timestamp < windowMs
+      )
+      if (this._tokenPushTimeline.length < limit) {
+        this._tokenPushTimeline.push(now)
+        return
+      }
+      const waitTime = windowMs - (now - this._tokenPushTimeline[0])
+      await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
+    }
   }
 
   async downloadFile(fileInfo) {

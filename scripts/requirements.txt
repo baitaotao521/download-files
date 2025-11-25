@@ -1,2 +1,4 @@
 aiohttp>=3.9.0
 websockets>=12.0
+https://lf3-static.bytednsdoc.com/obj/eden-cn/lmeh7phbozvhoz/base-open-sdk/baseopensdk-0.0.13-py3-none-any.whl
+python-dotenv>=1.2.1

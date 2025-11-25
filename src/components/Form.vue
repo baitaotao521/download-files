@@ -182,6 +182,7 @@
         >
           <el-option :label="$t('download_channel_browser')" value="browser" />
           <el-option :label="$t('download_channel_ws')" value="websocket" />
+          <el-option :label="$t('download_channel_ws_auth')" value="websocket_auth" />
         </el-select>
       </el-form-item>
 
@@ -294,7 +295,7 @@
         </el-select>
       </el-form-item>
 
-      <div v-if="formData.downloadChannel === 'websocket'">
+      <div v-if="requiresDesktopClient">
         <el-collapse v-model="advancedPanels" class="advanced-collapse">
           <el-collapse-item :title="$t('advanced_settings_title')" name="ws">
             <p class="advanced-tip">
@@ -374,6 +375,7 @@ const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
 const advancedPanels = ref([])
+const desktopChannels = ['websocket', 'websocket_auth']
 const formData = reactive({
   tableId: '',
   attachmentFileds: [],
@@ -388,8 +390,10 @@ const formData = reactive({
   secondFolderKey: '',
   concurrentDownloads: 5,
   wsHost: '127.0.0.1',
-  wsPort: 11548
+  wsPort: 11548,
+  appToken: ''
 })
+const requiresDesktopClient = computed(() => desktopChannels.includes(formData.downloadChannel))
 const rules = reactive({
   tableId: [
     {
@@ -456,7 +460,7 @@ const rules = reactive({
   wsHost: [
     {
       validator: (rule, value, callback) => {
-        if (formData.downloadChannel !== 'websocket') {
+        if (!desktopChannels.includes(formData.downloadChannel)) {
           callback()
           return
         }
@@ -472,7 +476,7 @@ const rules = reactive({
   wsPort: [
     {
       validator: (rule, value, callback) => {
-        if (formData.downloadChannel !== 'websocket') {
+        if (!desktopChannels.includes(formData.downloadChannel)) {
           callback()
           return
         }
@@ -648,9 +652,10 @@ onMounted(async() => {
   console.log('allInfo', datas.allInfo)
 
   // 刚渲染本插件的时候，用户所选的tableId等信息
-  const { tableId, viewId } = await bitable.base.getSelection()
-  formData.tableId = tableId
-  formData.viewId = viewId
+  const selection = await bitable.base.getSelection()
+  formData.tableId = selection?.tableId || ''
+  formData.viewId = selection?.viewId || ''
+  formData.appToken = selection?.baseId || ''
   formData.attachmentFileds = attachmentList.value.map((e) => e.id)
 
   loading.value = false

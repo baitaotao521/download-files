@@ -79,11 +79,11 @@
   </div>
 </template>
 <script setup>
-import { ref, onMounted, reactive, toRefs, computed, defineEmits } from 'vue'
+import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
 import ProgressCircle from './ProgressCircle.vue'
 import FileDownloader from './downFiles.js'
 import { i18n } from '@/locales/i18n.js'
-import { getFileSize, debouncedSort } from '@/utils/index.js'
+import { getFileSize } from '@/utils/index.js'
 const $t = i18n.global.t
 const emit = defineEmits(['finsh'])
 const MAX_SIZE = 1073741824 * 1 // 1G
@@ -93,11 +93,13 @@ const failedIds = ref(new Set())
 const zipError = ref(false)
 const totalSize = ref(0)
 const totalLength = ref(0)
-const fileInfo = ref([])
 const maxInfo = ref('')
 const fileCellLength = ref(0)
 const zipProgressText = ref('')
 const showFailedOnly = ref(false)
+const activeRecords = new Map()
+const visibleActive = ref([])
+const visibleFailed = ref([])
 
 const props = defineProps({
   zipName: {
@@ -117,37 +119,35 @@ const getFailedIdsLength = computed(() => {
   return failedIds.value.size
 })
 
+const MAX_VISIBLE_ITEMS = 30
 const filteredFileInfo = computed(() => {
-  if (showFailedOnly.value) {
-    return fileInfo.value.filter(item => failedIds.value.has(item.index))
-  }
-  return fileInfo.value
+  return showFailedOnly.value ? visibleFailed.value : visibleActive.value
 })
+
+const refreshActiveDisplay = () => {
+  const items = Array.from(activeRecords.values())
+    .filter(item => item.type === 'loading')
+    .sort((a, b) => a.index - b.index)
+    .slice(0, MAX_VISIBLE_ITEMS)
+  visibleActive.value = items
+}
+
+const recordFailedDisplay = (entry) => {
+  const next = [entry, ...visibleFailed.value.filter(item => item.index !== entry.index)]
+  visibleFailed.value = next.slice(0, MAX_VISIBLE_ITEMS)
+}
+
+const removeFromFailedDisplay = (index) => {
+  const filtered = visibleFailed.value.filter(item => item.index !== index)
+  if (filtered.length !== visibleFailed.value.length) {
+    visibleFailed.value = filtered
+  }
+}
 
 const percent = computed(() => {
   const val = ((getCompletedIdsLength.value / totalLength.value) * 100).toFixed(2) - 0
   return val || 0
 })
-const sortFileInfo = () => {
-  // 定义优先级映射
-  const priority = {
-    'loading': 1,
-    'error': 2,
-    'default': 3 // 其他类型的优先级
-  }
-  // 重构数组，当数组长度大于20时，删除 type 为 'default' 的元素
-  if (fileInfo.value.length > 20) {
-    fileInfo.value = fileInfo.value.filter(item => {
-      return item.type !== 'success'
-    })
-  }
-
-  fileInfo.value.sort((a, b) => {
-    return (priority[a.type] || priority['default']) - (priority[b.type] || priority['default'])
-  })
-}
-
-const debouncedSortFileInfo = debouncedSort(sortFileInfo, 200)
 const { formData, zipName } = toRefs(props)
 onMounted(async() => {
   const fileDownloader = new FileDownloader({
@@ -169,46 +169,61 @@ onMounted(async() => {
   })
   fileDownloader.on('error', (errorInfo) => {
     const { index, message } = errorInfo
-    const itemIndex = fileInfo.value.findIndex((item) => item.index === index)
-
-    if (itemIndex !== -1) {
-      fileInfo.value[itemIndex].type = 'error'
-      fileInfo.value[itemIndex].percentage = message
-      failedIds.value.add(index)
-      debouncedSortFileInfo()
+    if (!Number.isInteger(index)) {
+      return
     }
+    failedIds.value.add(index)
+    const existing = activeRecords.get(index) || {
+      index,
+      name: $t('undefined'),
+      size: 0,
+      percentage: 0,
+      type: 'error'
+    }
+    existing.type = 'error'
+    existing.percentage = message || $t('file_download_failed')
+    activeRecords.delete(index)
+    recordFailedDisplay(existing)
+    refreshActiveDisplay()
   })
   fileDownloader.on('max_size_warning', (info) => {
     zipError.value = true
   })
 
   fileDownloader.on('progress', (progressInfo) => {
-    const { index, percentage, name, size } = progressInfo
-    if (completedIds.value.has(index)) {
+    const { index, percentage = 0, name, size } = progressInfo
+    if (!Number.isInteger(index) || completedIds.value.has(index)) {
       return
     }
-    const itemIndex = fileInfo.value.findIndex((item) => item.index === index)
-
-    if (itemIndex === -1) {
-      fileInfo.value.unshift({
+    let existing = activeRecords.get(index)
+    if (!existing) {
+      existing = {
         index,
-        percentage,
-        name,
+        name: name || $t('undefined'),
         size,
+        percentage,
         type: 'loading'
-      })
-    } else {
-      fileInfo.value[itemIndex].percentage = percentage
-
-      if (percentage >= 100) {
-        fileInfo.value[itemIndex].type = 'success'
-
-        completedIds.value.add(index) // 标记为已处理
-        debouncedSortFileInfo()
-      } else {
-        fileInfo.value[itemIndex].type = 'loading'
       }
+    } else {
+      if (name) {
+        existing.name = name
+      }
+      if (size !== undefined) {
+        existing.size = size
+      }
+      existing.percentage = percentage
     }
+    existing.type = 'loading'
+    removeFromFailedDisplay(index)
+    failedIds.value.delete(index)
+    if (percentage >= 100) {
+      existing.type = 'success'
+      completedIds.value.add(index)
+      activeRecords.delete(index)
+    } else {
+      activeRecords.set(index, existing)
+    }
+    refreshActiveDisplay()
   })
   fileDownloader.on('finshed', (cells) => {
     emit('finsh')

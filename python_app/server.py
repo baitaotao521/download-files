@@ -10,11 +10,18 @@ import logging
 import threading
 import time
 import zipfile
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Deque, Dict, Optional, Set, Literal
 
 import aiohttp
 import websockets
+try:  # pragma: no cover - optional dependency for授权模式
+  from baseopensdk import BaseClient
+  from baseopensdk.api.drive.v1 import DownloadMediaRequest
+except ImportError:  # noqa: WPS440
+  BaseClient = None  # type: ignore[assignment]
+  DownloadMediaRequest = None  # type: ignore[assignment]
 
 from .config import ServerConfig
 from .monitor import DownloadMonitor
@@ -40,19 +47,21 @@ class DownloadJobState:
     self.job_name: Optional[str] = None
     self.total: int = 0
     self.completed = False
+    self.download_mode: Literal['url', 'token'] = 'url'
+    self.app_token: Optional[str] = None
+    self.table_id: Optional[str] = None
+    self.sdk_client: Any = None
 
   async def configure(self, data: Dict[str, Any], websocket) -> bool:
     """应用前端传来的配置，若缺失则通知前端并阻止下载。"""
     if self.configured:
       return True
+    self.download_mode = 'url'
+    self.app_token = None
+    self.table_id = None
+    self.sdk_client = None
     try:
-      concurrent_raw = data.get('concurrent')
-      if concurrent_raw is None:
-        concurrent = self.handler.default_concurrency
-      else:
-        concurrent = int(concurrent_raw)
-        if concurrent <= 0:
-          raise ValueError('concurrent must be > 0')
+      concurrent = self.handler.default_concurrency
       zip_after = bool(data.get('zipAfterDownload'))
       job_id = str(data.get('jobId') or int(time.time()))
       job_name = data.get('zipName') or data.get('jobName') or f'download_{job_id}'
@@ -66,20 +75,55 @@ class DownloadJobState:
       )
       return False
 
-    self.semaphore = asyncio.Semaphore(concurrent)
+    self.semaphore = None
     self.zip_after = zip_after
     self.job_id = job_id
     self.job_name = self.handler._sanitize_component(job_name) or f'download_{job_id}'
     self.job_dir = self.handler._create_job_directory(self.job_name, self.job_id)
     self.total = max(total, 0)
     self.configured = True
+    await self._configure_download_mode(data, websocket)
+    if not self.configured:
+      return False
     self.handler._monitor_job_started(self.total)
     logging.info('job configured: job_id=%s concurrent=%s zip=%s', self.job_id, concurrent, zip_after)
     return True
 
+  async def _configure_download_mode(self, data: Dict[str, Any], websocket) -> None:
+    """根据前端传入信息记录下载模式。"""
+    requested_mode = str(data.get('downloadMode') or 'url').lower()
+    self.download_mode = requested_mode if requested_mode in ('url', 'token') else 'url'
+    if self.download_mode != 'token':
+      return
+    app_token = str(data.get('appToken') or '').strip()
+    table_id = str(data.get('tableId') or '').strip()
+    if not app_token or not table_id:
+      await self.handler._send_ack(
+        websocket,
+        status='error',
+        message='app token or table id missing for authorization download mode.',
+        order=None
+      )
+      self.configured = False
+      return
+    try:
+      self.sdk_client = self.handler.create_sdk_client(app_token)
+    except RuntimeError as exc:
+      await self.handler._send_ack(
+        websocket,
+        status='error',
+        message=str(exc),
+        order=None
+      )
+      self.configured = False
+      return
+    self.app_token = app_token
+    self.table_id = table_id
+    logging.info('authorization download enabled for job %s with app_token=%s', self.job_id, app_token)
+
   async def enqueue_download(self, data: Dict[str, Any], websocket) -> None:
     """按配置并发下载文件。"""
-    if not self.configured or not self.job_dir or not self.semaphore:
+    if not self.configured or not self.job_dir:
       await self.handler._send_ack(
         websocket,
         status='error',
@@ -127,59 +171,96 @@ class DownloadJobState:
       task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     self.handler._monitor_job_finished()
+    self.sdk_client = None
 
   async def _download_worker(self, file_info: Dict[str, Any], websocket) -> None:
     """受限的下载任务，负责单个文件处理。"""
-    async with self.semaphore:
-      download_url = file_info.get('downloadUrl')
-      file_name = file_info.get('name')
-      relative_path = file_info.get('path', '')
-      order = file_info.get('order')
-      if not download_url or not file_name:
-        await self.handler._send_ack(
-          websocket,
-          status='error',
-          message='missing downloadUrl or name',
-          order=order
-        )
-        return
-      success = False
-      self.handler._monitor_download_started()
-      try:
-        target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
-        saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
-        success = True
-      except ValueError as exc:
-        await self.handler._send_ack(
-          websocket,
-          status='error',
-          message=str(exc),
-          order=order
-        )
-        return
-      except Exception as exc:  # noqa: BLE001
-        logging.exception('download failed for %s', file_name)
-        await self.handler._send_ack(
-          websocket,
-          status='error',
-          message=str(exc),
-          order=order
-        )
-        return
-      finally:
-        self.handler._monitor_download_finished(success=success)
+    if self.semaphore:
+      async with self.semaphore:
+        await self._process_single_download(file_info, websocket)
+    else:
+      await self._process_single_download(file_info, websocket)
+
+  async def _process_single_download(self, file_info: Dict[str, Any], websocket) -> None:
+    download_url = file_info.get('downloadUrl')
+    file_token = file_info.get('token')
+    field_id = file_info.get('fieldId')
+    record_id = file_info.get('recordId')
+    file_name = file_info.get('name')
+    relative_path = file_info.get('path', '')
+    order = file_info.get('order')
+    if not file_name:
       await self.handler._send_ack(
         websocket,
-        status='success',
-        message=str(saved_path),
-        order=order,
-        extra={
-          'size': file_info.get('size'),
-          'name': file_name,
-          'path': str(saved_path.relative_to(self.job_dir)),
-          'stage': 'file'
-        }
+        status='error',
+        message='missing file name',
+        order=order
       )
+      return
+    if self.download_mode == 'token':
+      if not all([file_token, field_id, record_id, self.table_id, self.sdk_client]):
+        await self.handler._send_ack(
+          websocket,
+          status='error',
+          message='authorization download payload missing attachment identifiers.',
+          order=order
+        )
+        return
+    elif not download_url:
+      await self.handler._send_ack(
+        websocket,
+        status='error',
+        message='missing downloadUrl or name',
+        order=order
+      )
+      return
+    success = False
+    self.handler._monitor_download_started()
+    try:
+      target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
+      if self.download_mode == 'token':
+        saved_path = await self.handler._download_file_with_token(
+          self.sdk_client,
+          table_id=self.table_id,
+          field_id=field_id,
+          record_id=record_id,
+          file_token=file_token,
+          destination=target_path
+        )
+      else:
+        saved_path = await self.handler._download_file(self.http_session, download_url, target_path)
+      success = True
+    except ValueError as exc:
+      await self.handler._send_ack(
+        websocket,
+        status='error',
+        message=str(exc),
+        order=order
+      )
+      return
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('download failed for %s', file_name)
+      await self.handler._send_ack(
+        websocket,
+        status='error',
+        message=str(exc),
+        order=order
+      )
+      return
+    finally:
+      self.handler._monitor_download_finished(success=success)
+    await self.handler._send_ack(
+      websocket,
+      status='success',
+      message=str(saved_path),
+      order=order,
+      extra={
+        'size': file_info.get('size'),
+        'name': file_name,
+        'path': str(saved_path.relative_to(self.job_dir)),
+        'stage': 'file'
+      }
+    )
 
   def _create_zip_archive(self, job_dir: Path) -> Path:
     """同步创建 ZIP 包，供 finalize 调用。"""
@@ -208,6 +289,21 @@ class AttachmentDownloader:
     self.output_dir = config.ensure_output_dir()
     self.default_concurrency = config.normalized_concurrency()
     self.monitor = monitor
+    self._client_cache: Dict[str, Any] = {}
+    self._sdk_rate_lock = asyncio.Lock()
+    self._sdk_request_times: Deque[float] = deque()
+
+  def update_output_dir(self, new_dir: Path) -> Path:
+    """更新基础保存目录，确保新路径立即生效。"""
+    self.config.output_dir = Path(new_dir)
+    self.output_dir = self.config.ensure_output_dir()
+    logging.info('output directory switched to %s', self.output_dir)
+    return self.output_dir
+
+  def update_personal_token(self, token: Optional[str]) -> None:
+    """更新授权码并清理旧缓存。"""
+    self.config.personal_base_token = token
+    self._client_cache.clear()
 
   async def handle_connection(self, websocket, path=None) -> None:
     """处理单个客户端连接，并监听其消息流。"""
@@ -302,6 +398,161 @@ class AttachmentDownloader:
     logging.info('saved file to %s', destination)
     return destination
 
+  async def _download_file_with_token(
+    self,
+    client: Any,
+    *,
+    table_id: Optional[str],
+    field_id: str,
+    record_id: str,
+    file_token: str,
+    destination: Path
+  ) -> Path:
+    """通过 BaseOpenSDK 使用授权码下载附件。"""
+    if client is None or DownloadMediaRequest is None:
+      raise RuntimeError('authorization client unavailable')
+    if not table_id:
+      raise ValueError('table id missing for authorization download.')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    logging.info('downloading via SDK token=%s -> %s', file_token, destination)
+
+    await self._acquire_sdk_slot()
+
+    def _download() -> Path:
+      extra_payload = json.dumps({
+        'bitablePerm': {
+          'tableId': table_id,
+          'attachments': {
+            field_id: {
+              record_id: [file_token]
+            }
+          }
+        }
+      })
+      max_retries = 3
+      retry_delay = 1
+      for attempt in range(max_retries):
+        if attempt:
+          logging.info('retrying download for token=%s attempt=%s', file_token, attempt + 1)
+          time.sleep(retry_delay)
+        request = (
+          DownloadMediaRequest.builder()
+          .file_token(file_token)
+          .extra(extra_payload)
+          .build()
+        )
+        response = client.drive.v1.media.download(request)
+        if not response or not response.success():
+          self._handle_download_failure(response)
+          continue
+        stream = getattr(response, 'file', None)
+        if stream is None or not hasattr(stream, 'read'):
+          logging.warning('empty file stream for token=%s', file_token)
+          continue
+        try:
+          file_content = stream.read()
+        except Exception as exc:  # noqa: BLE001
+          logging.error('failed to read file stream: %s', exc)
+          continue
+        if not file_content:
+          logging.warning('empty file content for token=%s', file_token)
+          continue
+        preview = file_content[:8].strip()
+        if preview.startswith(b'{'):
+          try:
+            payload = json.loads(file_content.decode('utf-8'))
+            code = payload.get('code')
+            message = payload.get('msg') or payload.get('error') or '下载失败'
+            if code == 1011 or 'personal token is invalid' in str(message).lower():
+              raise RuntimeError('授权码无效，请在本地客户端下载器的“服务配置”中重新填写 Personal Base Token 后重试。')
+            raise RuntimeError(message)
+          except UnicodeDecodeError:
+            logging.warning('unexpected json-like response for token=%s', file_token)
+            continue
+        try:
+          with destination.open('wb') as file_obj:
+            file_obj.write(file_content)
+        except Exception as exc:  # noqa: BLE001
+          logging.error('failed to write file %s: %s', destination, exc)
+          continue
+        if not destination.exists():
+          logging.warning('file not created after write: %s', destination)
+          continue
+        return destination
+      raise RuntimeError('下载失败，请稍后重试。')
+
+    return await asyncio.to_thread(_download)
+  
+  async def _acquire_sdk_slot(self) -> None:
+    """限制 SDK 调用速率至每秒 2 次。"""
+    async with self._sdk_rate_lock:
+      while True:
+        now = time.monotonic()
+        while self._sdk_request_times and now - self._sdk_request_times[0] >= 1:
+          self._sdk_request_times.popleft()
+        if len(self._sdk_request_times) < 2:
+          self._sdk_request_times.append(now)
+          return
+        wait_time = 1 - (now - self._sdk_request_times[0])
+        await asyncio.sleep(max(wait_time, 0))
+
+  def _handle_download_failure(self, response: Any) -> None:
+    message = getattr(response, 'msg', '下载失败') or '下载失败'
+    normalized = str(message).lower()
+    code = getattr(response, 'code', None)
+    raw = getattr(response, 'raw', None)
+    status_code = None
+    if raw and hasattr(raw, 'header') and isinstance(raw.header, dict):
+      status_code = raw.header.get('status_code') or raw.header.get('Status-Code')
+    raw_content = getattr(raw, 'content', None)
+    raw_text = ''
+    if isinstance(raw_content, bytes):
+      try:
+        raw_text = raw_content.decode('utf-8')
+      except UnicodeDecodeError:
+        raw_text = ''
+    elif isinstance(raw_content, str):
+      raw_text = raw_content
+    logging.error(
+      'download failed code=%s status=%s msg=%s log_id=%s raw=%s',
+      code,
+      status_code,
+      message,
+      getattr(response, 'get_log_id', lambda: None)(),
+      raw_text
+    )
+    if code == 1011 or 'personal token is invalid' in normalized:
+      raise RuntimeError('授权码无效，请在本地客户端下载器的“服务配置”中重新填写 Personal Base Token 后重试。')
+    if status_code in (400, '400'):
+      raise RuntimeError('高级权限鉴权失败，请检查 extra 参数或授权信息。')
+    if status_code in (403, '403'):
+      raise RuntimeError('没有下载权限，请确认调用身份具备访问该附件的权限。')
+    if status_code in (404, '404'):
+      raise RuntimeError('附件不存在或已被删除，请检查 file_token 是否正确。')
+    if status_code in (500, '500'):
+      raise RuntimeError('服务端异常，请稍后重试。')
+    raise RuntimeError(message)
+
+  def create_sdk_client(self, app_token: str) -> Any:
+    """基于 app token 构建或复用 BaseOpenSDK 客户端。"""
+    personal_token = self.config.normalized_personal_token()
+    if not personal_token:
+      raise RuntimeError('客户端未配置授权码（Personal Base Token），请在本地客户端下载器的“服务配置”中填写后重试。')
+    if BaseClient is None or DownloadMediaRequest is None:
+      raise RuntimeError('baseopensdk dependency is not installed on the local client.')
+    cache_key = f'{app_token}:{personal_token}'
+    cached = self._client_cache.get(cache_key)
+    if cached:
+      return cached
+    client = (
+      BaseClient.builder()
+      .app_token(app_token)
+      .personal_base_token(personal_token)
+      .build()
+    )
+    self._client_cache[cache_key] = client
+    return client
+
   async def _send_ack(
     self,
     websocket,
@@ -382,6 +633,7 @@ class WebSocketDownloadServer:
     self._thread: Optional[threading.Thread] = None
     self._stop_event: Optional[asyncio.Event] = None
     self._task: Optional[asyncio.Task] = None
+    self._downloader: Optional[AttachmentDownloader] = None
 
   @property
   def is_running(self) -> bool:
@@ -399,6 +651,7 @@ class WebSocketDownloadServer:
       asyncio.set_event_loop(self._loop)
       self._stop_event = asyncio.Event()
       downloader = AttachmentDownloader(self.config, monitor=self.monitor)
+      self._downloader = downloader
       server_coro = self._serve_until_stopped(downloader, self._stop_event)
       self._task = self._loop.create_task(server_coro)
       try:
@@ -410,6 +663,7 @@ class WebSocketDownloadServer:
         with contextlib.suppress(Exception):
           self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         self._loop.close()
+        self._downloader = None
 
     self._thread = threading.Thread(target=runner, daemon=True)
     self._thread.start()
@@ -437,3 +691,35 @@ class WebSocketDownloadServer:
     """在事件循环中设置停止事件。"""
     if self._stop_event and not self._stop_event.is_set():
       self._stop_event.set()
+
+  def update_output_dir(self, new_dir: str | Path) -> Path:
+    """更新当前运行服务的保存目录，必要时通知下载器。"""
+    if not new_dir:
+      raise ValueError('output directory cannot be empty')
+    self.config.output_dir = Path(new_dir)
+    normalized = self.config.ensure_output_dir()
+    if not self.is_running or not self._loop or not self._downloader:
+      return normalized
+
+    async def _apply_update() -> Path:
+      """在事件循环中调用下载器更新目录。"""
+      if not self._downloader:
+        return normalized
+      return self._downloader.update_output_dir(normalized)
+
+    future = asyncio.run_coroutine_threadsafe(_apply_update(), self._loop)
+    return future.result(timeout=5)
+
+  def update_personal_token(self, token: Optional[str]) -> None:
+    """更新授权码并同步给运行中的下载器。"""
+    normalized = (token or '').strip() or None
+    self.config.personal_base_token = normalized
+    if not self.is_running or not self._loop or not self._downloader:
+      return
+
+    async def _apply_update() -> None:
+      if self._downloader:
+        self._downloader.update_personal_token(normalized)
+
+    future = asyncio.run_coroutine_threadsafe(_apply_update(), self._loop)
+    future.result(timeout=5)

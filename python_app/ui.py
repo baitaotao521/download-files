@@ -4,17 +4,33 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
+import subprocess
+import sys
+from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, Optional
+
+from dotenv import load_dotenv, find_dotenv
 
 from .config import ServerConfig
 from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES
 from .monitor import DownloadMonitor
 from .server import WebSocketDownloadServer, configure_logging
+from .user_config import (
+  CONFIG_FILE,
+  DEFAULT_HOST,
+  DEFAULT_OUTPUT_DIR,
+  UserPreferences,
+  load_user_config,
+  save_user_config
+)
 
-DEFAULT_PYTHON_CONCURRENCY = 5
+load_dotenv(find_dotenv(), override=False)
+
+DEFAULT_PYTHON_CONCURRENCY = 20
 
 
 class GuiLogHandler(logging.Handler):
@@ -42,6 +58,7 @@ class DownloaderDesktopApp:
     """初始化 Tk 根窗口、控件、日志管道与本地化。"""
     configure_logging('INFO')
     self.localizer = Localizer(DEFAULT_LANGUAGE)
+    self.user_preferences: UserPreferences = load_user_config()
     self.root = tk.Tk()
     self.root.minsize(640, 420)
     self.server: Optional[WebSocketDownloadServer] = None
@@ -53,8 +70,9 @@ class DownloaderDesktopApp:
     self.language_code_map: Dict[str, str] = {label: code for label, code in SUPPORTED_LANGUAGES}
     self._status_state = 'idle'
     self._status_context: Dict[str, str] = {}
+    self._initial_language_code = self._normalize_language_code(self.user_preferences.language)
     self._build_widgets()
-    self._set_language(DEFAULT_LANGUAGE)
+    self._set_language(self._initial_language_code)
     self._schedule_log_polling()
     self._schedule_stats_refresh()
     self._start_server(auto=True)
@@ -68,7 +86,7 @@ class DownloaderDesktopApp:
     language_frame.pack(fill=tk.X)
     self.language_label_widget = ttk.Label(language_frame, text='')
     self.language_label_widget.pack(side=tk.LEFT)
-    default_label = self.language_label_map.get(DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES[0][0])
+    default_label = self.language_label_map.get(self._initial_language_code, SUPPORTED_LANGUAGES[0][0])
     self.language_var = tk.StringVar(value=default_label)
     self.language_combo = ttk.Combobox(
       language_frame,
@@ -84,11 +102,25 @@ class DownloaderDesktopApp:
     self.form_frame.pack(fill=tk.X, expand=False)
     self.output_label = ttk.Label(self.form_frame, text='')
     self.output_label.grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
-    self.output_var = tk.StringVar(value='downloads')
+    self.output_var = tk.StringVar(value=self.user_preferences.output_dir or 'downloads')
     output_entry = ttk.Entry(self.form_frame, textvariable=self.output_var, width=40)
     output_entry.grid(row=0, column=1, columnspan=2, sticky=tk.W + tk.E, padx=4, pady=4)
+    output_entry.bind('<FocusOut>', self._on_output_dir_commit)
+    output_entry.bind('<Return>', self._on_output_dir_commit)
     self.browse_button = ttk.Button(self.form_frame, text='', command=self._choose_output_dir)
     self.browse_button.grid(row=0, column=3, sticky=tk.W, padx=4, pady=4)
+    self.open_output_button = ttk.Button(self.form_frame, text='', command=self._open_output_dir)
+    self.open_output_button.grid(row=0, column=4, sticky=tk.W, padx=4, pady=4)
+    initial_token = self.user_preferences.personal_base_token or os.environ.get('PERSONAL_BASE_TOKEN', '')
+    self.personal_token_label = ttk.Label(self.form_frame, text='')
+    self.personal_token_label.grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
+    self.personal_token_var = tk.StringVar(value=initial_token)
+    personal_token_entry = ttk.Entry(self.form_frame, textvariable=self.personal_token_var, width=40, show='*')
+    personal_token_entry.grid(row=1, column=1, columnspan=3, sticky=tk.W + tk.E, padx=4, pady=4)
+    personal_token_entry.bind('<FocusOut>', self._on_personal_token_commit)
+    personal_token_entry.bind('<Return>', self._on_personal_token_commit)
+    self.personal_token_hint = ttk.Label(self.form_frame, text='', wraplength=420, foreground='#666666')
+    self.personal_token_hint.grid(row=2, column=1, columnspan=3, sticky=tk.W, padx=4, pady=(0, 8))
     self.form_frame.columnconfigure(1, weight=1)
     self.form_frame.columnconfigure(2, weight=1)
 
@@ -112,12 +144,18 @@ class DownloaderDesktopApp:
     self.advanced_frame = ttk.LabelFrame(main_frame, text='', padding=12)
     self.host_label = ttk.Label(self.advanced_frame, text='')
     self.host_label.grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
-    self.host_var = tk.StringVar(value='127.0.0.1')
-    ttk.Entry(self.advanced_frame, textvariable=self.host_var, width=20).grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
+    self.host_var = tk.StringVar(value=self.user_preferences.host or '127.0.0.1')
+    host_entry = ttk.Entry(self.advanced_frame, textvariable=self.host_var, width=20)
+    host_entry.grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
+    host_entry.bind('<FocusOut>', self._on_host_commit)
+    host_entry.bind('<Return>', self._on_host_commit)
     self.port_label = ttk.Label(self.advanced_frame, text='')
     self.port_label.grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
-    self.port_var = tk.StringVar(value='11548')
-    ttk.Entry(self.advanced_frame, textvariable=self.port_var, width=10).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
+    self.port_var = tk.StringVar(value=str(self.user_preferences.port or 11548))
+    port_entry = ttk.Entry(self.advanced_frame, textvariable=self.port_var, width=10)
+    port_entry.grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
+    port_entry.bind('<FocusOut>', self._on_port_commit)
+    port_entry.bind('<Return>', self._on_port_commit)
     self.advanced_tip = ttk.Label(self.advanced_frame, text='', wraplength=360)
     self.advanced_tip.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 0))
     self.advanced_frame.columnconfigure(1, weight=1)
@@ -136,6 +174,8 @@ class DownloaderDesktopApp:
     self.start_button.pack(side=tk.RIGHT, padx=4)
     self.stop_button = ttk.Button(button_frame, text='', command=self._stop_server)
     self.stop_button.pack(side=tk.RIGHT, padx=4)
+    self.open_config_button = ttk.Button(button_frame, text='', command=self._open_config_folder)
+    self.open_config_button.pack(side=tk.RIGHT, padx=4)
 
     self.log_frame = ttk.LabelFrame(main_frame, text='', padding=8)
     self.log_text = tk.Text(self.log_frame, state=tk.DISABLED, height=12, wrap=tk.NONE)
@@ -148,6 +188,79 @@ class DownloaderDesktopApp:
     selected = filedialog.askdirectory()
     if selected:
       self.output_var.set(selected)
+      self._apply_output_dir_change()
+
+  def _on_output_dir_commit(self, _event=None) -> None:
+    """处理输入框失焦或回车事件，应用新的目录。"""
+    self._apply_output_dir_change()
+
+  def _apply_output_dir_change(self) -> None:
+    """将最新的保存目录同步到运行中的服务。"""
+    new_dir = self.output_var.get().strip()
+    if not new_dir:
+      return
+    self._update_user_preferences(output_dir=new_dir)
+    if not self.server or not self.server.is_running:
+      return
+    try:
+      updated = self.server.update_output_dir(new_dir)
+      logging.info('output directory updated to %s', updated)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to update output directory')
+      messagebox.showerror(
+        self._t('dialog_error_title'),
+        self._t('msg_output_dir_failed', error=str(exc))
+      )
+
+  def _on_host_commit(self, _event=None) -> None:
+    """在主机输入框失焦或回车时保存配置。"""
+    host = self.host_var.get().strip() or DEFAULT_HOST
+    self.host_var.set(host)
+    self._update_user_preferences(host=host)
+
+  def _on_port_commit(self, _event=None) -> None:
+    """在端口输入框失焦或回车时校验并保存。"""
+    try:
+      port = self._parse_port_value(self.port_var.get())
+    except ValueError as exc:
+      messagebox.showerror(self._t('dialog_error_title'), str(exc))
+      self.port_var.set(str(self.user_preferences.port))
+      return
+    self._update_user_preferences(port=port)
+
+  def _on_personal_token_commit(self, _event=None) -> None:
+    """在授权码输入框失焦或回车时保存值。"""
+    token = self.personal_token_var.get().strip()
+    self._update_user_preferences(personal_base_token=token)
+    self._apply_personal_token_change(token)
+
+  def _update_user_preferences(self, **changes) -> None:
+    """合并偏好修改并写入配置文件。"""
+    for key, value in changes.items():
+      setattr(self.user_preferences, key, value)
+    self._save_user_preferences()
+
+  def _apply_personal_token_change(self, token: str) -> None:
+    """将授权码变更同步至运行中的服务。"""
+    if not self.server or not self.server.is_running:
+      return
+    normalized = token.strip()
+    try:
+      self.server.update_personal_token(normalized or None)
+      logging.info('personal base token updated')
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to update personal token')
+      messagebox.showerror(
+        self._t('dialog_error_title'),
+        self._t('msg_personal_token_failed', error=str(exc))
+      )
+
+  def _save_user_preferences(self) -> None:
+    """安全地保存用户配置。"""
+    try:
+      save_user_config(self.user_preferences)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to save user preferences: %s', exc)
 
   def _toggle_advanced(self) -> None:
     """切换高级设置面板可见性。"""
@@ -170,6 +283,38 @@ class DownloaderDesktopApp:
     """切换日志面板显示。"""
     self.log_visible = not self.log_visible
     self._update_log_visibility()
+
+  def _open_output_dir(self) -> None:
+    """打开当前保存目录。"""
+    output_path = self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR
+    try:
+      target = Path(output_path).expanduser().resolve()
+      target.mkdir(parents=True, exist_ok=True)
+      if sys.platform.startswith('win'):
+        os.startfile(target)  # type: ignore[attr-defined]
+      elif sys.platform == 'darwin':
+        subprocess.Popen(['open', str(target)], close_fds=True)
+      else:
+        subprocess.Popen(['xdg-open', str(target)], close_fds=True)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to open output directory')
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_open_output_failed', error=str(exc)))
+
+  def _open_config_folder(self) -> None:
+    """通过系统默认程序打开配置文件所在目录。"""
+    try:
+      target_dir = CONFIG_FILE.parent
+      target_dir.mkdir(parents=True, exist_ok=True)
+      CONFIG_FILE.touch(exist_ok=True)
+      if sys.platform.startswith('win'):
+        os.startfile(target_dir)  # type: ignore[attr-defined]
+      elif sys.platform == 'darwin':
+        subprocess.Popen(['open', str(target_dir)], close_fds=True)
+      else:
+        subprocess.Popen(['xdg-open', str(target_dir)], close_fds=True)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to open config folder')
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_open_config_failed', error=str(exc)))
 
   def _update_log_visibility(self) -> None:
     """根据状态显示/隐藏日志区。"""
@@ -195,17 +340,29 @@ class DownloaderDesktopApp:
     self.completed_var.set(self._t('stat_completed', count=snapshot['completed']))
     self.pending_var.set(self._t('stat_pending', count=snapshot['pending']))
 
-  def _build_config(self) -> ServerConfig:
-    """根据界面输入构造 ServerConfig。"""
+  def _parse_port_value(self, value: str) -> int:
+    """校验端口输入并返回整数。"""
     try:
-      port = int(self.port_var.get())
+      port = int(value)
     except ValueError as exc:
       raise ValueError(self._t('msg_invalid_port')) from exc
+    if not 1 <= port <= 65535:
+      raise ValueError(self._t('msg_invalid_port'))
+    return port
+
+  def _build_config(self) -> ServerConfig:
+    """根据界面输入构造 ServerConfig。"""
+    port = self._parse_port_value(self.port_var.get())
+    host = self.host_var.get().strip() or '127.0.0.1'
+    output_dir = self.output_var.get().strip() or 'downloads'
+    personal_token = self.personal_token_var.get().strip()
+    self._update_user_preferences(host=host, port=port, output_dir=output_dir, personal_base_token=personal_token)
     return ServerConfig(
-      host=self.host_var.get().strip() or '127.0.0.1',
+      host=host,
       port=port,
-      output_dir=self.output_var.get().strip() or 'downloads',
-      download_concurrency=DEFAULT_PYTHON_CONCURRENCY
+      output_dir=output_dir,
+      download_concurrency=DEFAULT_PYTHON_CONCURRENCY,
+      personal_base_token=personal_token
     )
 
   def _start_server(self, auto: bool = False) -> None:
@@ -271,13 +428,20 @@ class DownloaderDesktopApp:
 
   def _set_language(self, code: str) -> None:
     """根据语言代码更新界面文本。"""
-    if code not in self.language_label_map:
-      code = DEFAULT_LANGUAGE
+    code = self._normalize_language_code(code)
     self.localizer.set_locale(code)
+    if self.user_preferences.language != code:
+      self._update_user_preferences(language=code)
     label = self.language_label_map.get(code, list(self.language_label_map.values())[0])
     if self.language_combo.get() != label:
       self.language_combo.set(label)
     self._apply_translations()
+
+  def _normalize_language_code(self, code: Optional[str]) -> str:
+    """确保语言代码在支持列表中。"""
+    if code in self.language_label_map:
+      return code
+    return DEFAULT_LANGUAGE
 
   def _on_language_change(self, _event) -> None:
     """语言选择事件回调。"""
@@ -297,9 +461,13 @@ class DownloaderDesktopApp:
     self.browse_button.config(text=self._t('browse'))
     self.start_button.config(text=self._t('btn_start'))
     self.stop_button.config(text=self._t('btn_stop'))
+    self.open_output_button.config(text=self._t('btn_open_output_dir'))
+    self.open_config_button.config(text=self._t('btn_open_config'))
     self.log_frame.config(text=self._t('logs'))
     self.advanced_frame.config(text=self._t('advanced_settings'))
     self.advanced_tip.config(text=self._t('advanced_settings_desc'))
+    self.personal_token_label.config(text=self._t('personal_token') + ':')
+    self.personal_token_hint.config(text=self._t('personal_token_hint'))
     self._update_advanced_visibility()
     self._update_log_visibility()
     self._refresh_stats()
