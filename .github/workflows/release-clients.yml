@@ -130,8 +130,10 @@ jobs:
         include:
           - python_arch: x64
             arch_tag: x64
+            iscc_arch: x64
           - python_arch: x86
             arch_tag: x86
+            iscc_arch: x86
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -148,29 +150,67 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements.txt pyinstaller
 
-      - name: Install UPX
-        run: choco install upx -y --no-progress
+      - name: Install Build Tools
+        run: choco install upx innosetup -y --no-progress
 
-      - name: Configure UPX directory
+      - name: Configure paths
         shell: pwsh
         run: |
           $upxDir = Split-Path (Get-Command upx.exe).Source
           "UPX_DIR=$upxDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Build Binaries
+      - name: Build Binaries (Portable)
         shell: pwsh
         env:
-          ADD_DATA_ARG: '--add-data="python_app/locales;python_app/locales"'
+          # 修复点：移除了 --add-data 值中的双引号
+          ADD_DATA_ARG: '--add-data=python_app/locales;python_app/locales'
         run: |
-          # 修复参数解析问题
+          # 1. 构建 CLI
           pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR"
+          
+          # 2. 构建 Desktop (GUI)
           pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR" --windowed
+
+      - name: Create Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $appVersion = "${{ github.ref_name }}" -replace "v","" 
+          if ($appVersion -eq "master" -or $appVersion -eq "main") { $appVersion = "1.0.0" }
+          
+          $issContent = @"
+          [Setup]
+          AppName=Feishu Downloader
+          AppVersion=$appVersion
+          DefaultDirName={autopf}\Feishu Downloader
+          DefaultGroupName=Feishu Downloader
+          OutputBaseFilename=feishu-downloader-setup-windows-${{ matrix.arch_tag }}
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesInstallIn64BitMode=${{ matrix.iscc_arch }}
+          DisableProgramGroupPage=yes
+          
+          [Files]
+          Source: "dist\feishu-downloader-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "dist\feishu-downloader-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
+          
+          [Icons]
+          Name: "{group}\Feishu Downloader"; Filename: "{app}\feishu-downloader-desktop.exe"
+          Name: "{autodesktop}\Feishu Downloader"; Filename: "{app}\feishu-downloader-desktop.exe"
+          
+          [Run]
+          Filename: "{app}\feishu-downloader-desktop.exe"; Description: "Launch Feishu Downloader"; Flags: nowait postinstall skipifsilent
+          "@
+          
+          $issContent | Out-File -FilePath "setup.iss" -Encoding UTF8
+          ISCC.exe setup.iss
 
       - name: Prepare artifacts
         run: |
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           Move-Item dist\feishu-downloader-cli.exe artifacts\feishu-downloader-cli-windows-${{ matrix.arch_tag }}.exe
           Move-Item dist\feishu-downloader-desktop.exe artifacts\feishu-downloader-desktop-windows-${{ matrix.arch_tag }}.exe
+          Move-Item Output\feishu-downloader-setup-windows-${{ matrix.arch_tag }}.exe artifacts\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
