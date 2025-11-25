@@ -48,6 +48,8 @@
   "no": "No",
   "select_first_directory": "Select First Directory",
   "select_second_directory": "Select Second Directory",
+  "file_download_failed": "File download failed",
+  "error_message": "Error message",
   "fetching_file_info_message": "Fetching file information...",
   "no_files_to_download_message": "There are no files to download currently. Please confirm.",
   "files_pending_download_message": "There are fileQty files pending download.",
