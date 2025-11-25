@@ -17,8 +17,9 @@ from dotenv import load_dotenv, find_dotenv
 
 from .config import ServerConfig
 from .i18n import DEFAULT_LANGUAGE, Localizer, SUPPORTED_LANGUAGES
+from .logging_utils import configure_logging
 from .monitor import DownloadMonitor
-from .server import WebSocketDownloadServer, configure_logging
+from .websocket_server import WebSocketDownloadServer
 from .user_config import (
   CONFIG_FILE,
   DEFAULT_HOST,

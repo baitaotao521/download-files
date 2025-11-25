@@ -25,7 +25,8 @@ if str(ROOT_DIR) not in sys.path:
 load_dotenv(find_dotenv(), override=False)
 
 from python_app.config import ServerConfig
-from python_app.server import configure_logging, run_server_forever
+from python_app.logging_utils import configure_logging
+from python_app.websocket_server import run_server_forever
 
 
 def parse_args() -> argparse.Namespace:
