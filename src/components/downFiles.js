@@ -18,7 +18,8 @@ const $t = i18n.global.t
 const MAX_ZIP_SIZE_NUM = 1
 
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
-
+// 下载工作线程并发数
+const DOWNLOAD_WORKER_CONCURRENCY = 10
 const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
@@ -261,6 +262,29 @@ class FileDownloader {
     return name
   }
   /**
+   * 以有限并发运行任务，避免一次性占满资源。
+   */
+  async runWithConcurrency(list, worker, concurrency = DOWNLOAD_WORKER_CONCURRENCY) {
+    const source = Array.isArray(list) ? list : []
+    if (!source.length) return
+    const limit = Math.max(1, Math.min(concurrency, source.length))
+    let cursor = 0
+    const pick = () => {
+      if (cursor >= source.length) return null
+      const current = source[cursor]
+      cursor += 1
+      return current
+    }
+    const runners = Array.from({ length: limit }, async() => {
+      while (true) {
+        const item = pick()
+        if (!item) break
+        await worker(item)
+      }
+    })
+    await Promise.all(runners)
+  }
+  /**
    * 按 ZIP 包体积切片并串行写入压缩包。
    */
   async zipDownLoad() {
@@ -274,9 +298,10 @@ class FileDownloader {
 
     for (const zipList of zipsList) {
       this.zip = new JSZip()
-      for (const fileInfo of zipList) {
-        await this.processFile(fileInfo)
-      }
+      await this.runWithConcurrency(
+        zipList,
+        (fileInfo) => this.processFile(fileInfo)
+      )
       const [err, content] = await to(this.zip.generateAsync(
         { type: 'blob' },
         (metadata) => {
@@ -299,6 +324,9 @@ class FileDownloader {
    * 获取附件直链并应用唯一文件名。
    */
   async getAttachmentUrl(fileInfo) {
+    if (fileInfo.fileUrl) {
+      return fileInfo.fileUrl
+    }
     const { token, fieldId, recordId, path, name } = fileInfo
 
     fileInfo.name = this.getUniqueFileName(name, path)
@@ -307,6 +335,7 @@ class FileDownloader {
       fieldId,
       recordId
     )
+    return fileInfo.fileUrl
   }
   /**
    * 处理单个文件，获取内容并写入当前 Zip。
@@ -336,12 +365,13 @@ class FileDownloader {
         URL.revokeObjectURL(objectUrl)
       }
     }
-    for (let index = 0; index < cellList.length; index++) {
-      const fileInfo = cellList[index]
-
-      await this.getAttachmentUrl(fileInfo)
-      await downLocal(fileInfo)
-    }
+    await this.runWithConcurrency(
+      cellList,
+      async(fileInfo) => {
+        await this.getAttachmentUrl(fileInfo)
+        await downLocal(fileInfo)
+      }
+    )
   }
   /**
    * 通过浏览器串行下载：根据选择切换 zip 或逐个下载。
@@ -405,7 +435,7 @@ class FileDownloader {
         if (abortDownloads) break
         const { order } = fileInfo
         try {
-          if (!useTokenMode) {
+          if (!useTokenMode && !fileInfo.fileUrl) {
             await this.getAttachmentUrl(fileInfo)
           }
           if (abortDownloads) break
