@@ -1,0 +1,115 @@
+name: Build with Nuitka
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            # Windows 下的可执行文件后缀
+            ext: .exe
+          - os: ubuntu-latest
+            name: linux-x64
+            ext: ""
+          - os: macos-latest
+            name: macos-x64
+            ext: ""
+            
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.name }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r scripts/requirements.txt
+          # Nuitka 不需要安装在 pip 里，Action 会自己处理，但代码依赖必须装
+
+      - name: Build CLI with Nuitka
+        uses: Nuitka/Nuitka-Action@v1
+        with:
+          nuitka-version: main
+          script-name: scripts/ws_downloader.py
+          output-file: feishu-downloader-cli${{ matrix.ext }}
+          standalone: true
+          onefile: true
+          # 开启 LTO 链接优化，虽然构建慢但体积更小
+          lto: yes 
+          # 包含数据文件 (源路径=目标路径)
+          include-data-dir: |
+            python_app/locales=python_app/locales
+            python_app/_version.txt=python_app
+          include-data-files: public/app.ico=public/app.ico
+          # 针对 Windows 的一些参数
+          windows-icon-from-ico: public/app.ico
+          company-name: "YourCompany"
+          product-name: "Feishu Downloader"
+          file-version: ${{ github.ref_name }}
+          
+      - name: Build Desktop (GUI) with Nuitka
+        uses: Nuitka/Nuitka-Action@v1
+        with:
+          nuitka-version: main
+          script-name: scripts/ws_desktop.py
+          output-file: feishu-downloader-desktop${{ matrix.ext }}
+          standalone: true
+          onefile: true
+          lto: yes
+          # 禁用控制台窗口 (仅 GUI)
+          windows-disable-console: true
+          macos-disable-console: true
+          # 数据文件
+          include-data-dir: |
+            python_app/locales=python_app/locales
+            python_app/_version.txt=python_app
+          include-data-files: public/app.ico=public/app.ico
+          # 图标与元数据
+          windows-icon-from-ico: public/app.ico
+          macos-app-icon: public/app.ico
+          company-name: "YourCompany"
+          product-name: "Feishu Downloader"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.name }}
+          path: build/*.bin # Nuitka Action 默认输出在这个目录
+          # 注意：上面的 Action 可能直接输出在根目录，取决于配置，
+          # 建议查看 Action 文档或构建日志确认输出路径。
+          # Nuitka Action 通常会把编译结果放在当前目录或 build 文件夹。
+          path: |
+            *.exe
+            *.bin
+            feishu-downloader-cli*
+            feishu-downloader-desktop*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/**/*
