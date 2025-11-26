@@ -1,4 +1,4 @@
-name: Build with Nuitka
+name: Build Tkinter App
 
 on:
   push:
@@ -16,14 +16,16 @@ jobs:
         include:
           - os: windows-latest
             name: windows-x64
-            # Windows 下的可执行文件后缀
             ext: .exe
+            icon: public/app.ico
           - os: ubuntu-latest
             name: linux-x64
             ext: ""
+            icon: public/app.ico
           - os: macos-latest
             name: macos-x64
             ext: ""
+            icon: public/app.ico
 
     runs-on: ${{ matrix.os }}
     name: Build ${{ matrix.name }}
@@ -32,74 +34,96 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 1. 设置 Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+          cache: 'pip' # 自动缓存 pip 依赖
 
-      - name: Install Dependencies
+      # 2. 安装系统级依赖 (Linux)
+      # 增加 patchelf (Nuitka打包必须) 和 ccache (加速编译)
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
-          pip install -r scripts/requirements.txt
-          # Nuitka 不需要安装在 pip 里，Action 会自己处理，但代码依赖必须装
+          sudo apt-get update
+          sudo apt-get install -y python3-tk tk-dev tcl-dev patchelf ccache
 
-      - name: Build CLI with Nuitka
-        uses: Nuitka/Nuitka-Action@v1
+      # 3. 安装 Python 依赖
+      - name: Install Dependencies
+        run: pip install -r scripts/requirements.txt
+
+      # 4. 配置 Nuitka 缓存 (显著提升二次构建速度)
+      - name: Setup Nuitka Cache
+        uses: actions/cache@v4
         with:
-          nuitka-version: main
+          path: |
+            var/cache/nuitka
+            ~/.cache/Nuitka
+            ~/AppData/Local/Nuitka/Nuitka/Cache
+            ~/Library/Caches/Nuitka
+          key: ${{ runner.os }}-nuitka-${{ hashFiles('scripts/requirements.txt') }}-${{ github.ref }}
+          restore-keys: |
+            ${{ runner.os }}-nuitka-${{ hashFiles('scripts/requirements.txt') }}-
+            ${{ runner.os }}-nuitka-
+
+      # 5. 构建 CLI 版本
+      - name: Build CLI
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: stable # 推荐使用 stable 而非 main
           script-name: scripts/ws_downloader.py
           output-file: feishu-downloader-cli${{ matrix.ext }}
-          standalone: true
-          onefile: true
-          # 开启 LTO 链接优化，虽然构建慢但体积更小
-          lto: yes
-          # 包含数据文件 (源路径=目标路径)
+          mode: onefile
+          lto: yes # 生产环境开启 LTO 优化体积和性能
+
+          # CLI 专有配置
           include-data-dir: |
             python_app/locales=python_app/locales
             python_app/_version.txt=python_app
-          include-data-files: public/app.ico=public/app.ico
-          # 针对 Windows 的一些参数
-          windows-icon-from-ico: public/app.ico
-          company-name: "YourCompany"
-          product-name: "Feishu Downloader"
+          include-data-files: ${{ matrix.icon }}=${{ matrix.icon }}
+
+          # 元数据
+          company-name: "baitaotao521"
+          product-name: "Feishu Downloader CLI"
           file-version: ${{ github.ref_name }}
 
-      - name: Build Desktop (GUI) with Nuitka
-        uses: Nuitka/Nuitka-Action@v1
+      # 6. 构建 Desktop (GUI - Tkinter)
+      - name: Build Desktop (Tkinter)
+        uses: Nuitka/Nuitka-Action@main
         with:
-          nuitka-version: main
+          nuitka-version: stable
           script-name: scripts/ws_desktop.py
           output-file: feishu-downloader-desktop${{ matrix.ext }}
-          standalone: true
-          onefile: true
+          mode: onefile
           lto: yes
-          # 禁用控制台窗口 (仅 GUI)
-          windows-disable-console: true
-          macos-disable-console: true
-          # 数据文件
+
+          # === GUI 关键配置 ===
+          enable-plugins: tk-inter
+          enable-console: false # 修正：使用 enable-console: false 替代旧的 disable 参数
+
+          # 资源文件
           include-data-dir: |
             python_app/locales=python_app/locales
             python_app/_version.txt=python_app
-          include-data-files: public/app.ico=public/app.ico
-          # 图标与元数据
-          windows-icon-from-ico: public/app.ico
-          macos-app-icon: public/app.ico
-          company-name: "YourCompany"
+          include-data-files: ${{ matrix.icon }}=${{ matrix.icon }}
+
+          # 图标配置
+          windows-icon-from-ico: ${{ matrix.icon }}
+          macos-app-icon: ${{ matrix.icon }}
+
+          # 元数据
+          company-name: "baitaotao521"
           product-name: "Feishu Downloader"
+          file-version: ${{ github.ref_name }}
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.name }}
-          path: build/*.bin # Nuitka Action 默认输出在这个目录
-          # 注意：上面的 Action 可能直接输出在根目录，取决于配置，
-          # 建议查看 Action 文档或构建日志确认输出路径。
-          # Nuitka Action 通常会把编译结果放在当前目录或 build 文件夹。
           path: |
-            *.exe
-            *.bin
-            feishu-downloader-cli*
-            feishu-downloader-desktop*
+            feishu-downloader-cli${{ matrix.ext }}
+            feishu-downloader-desktop${{ matrix.ext }}
 
   publish:
     needs: build
