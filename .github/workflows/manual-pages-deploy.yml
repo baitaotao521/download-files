@@ -22,7 +22,7 @@ jobs:
           cache: npm
 
       - name: Build frontend
-        run: npm run build
+        run: npm install && npm run build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
