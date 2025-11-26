@@ -83,9 +83,27 @@ class FileDownloader {
     return this.downloadChannel === 'websocket_auth'
   }
   /**
-   * 分页拉取记录列表，返回聚合后的记录数据。
+   * 根据记录选择情况聚合记录：优先使用手动选择，否则分页获取视图全部记录。
    */
   async loopGetRecordIdList(list = [], pageToken) {
+    const hasExplicitSelection = Array.isArray(this.selectedRecordIds) && this.selectedRecordIds.length
+    if (hasExplicitSelection) {
+      const uniqueIds = Array.from(new Set(this.selectedRecordIds))
+      for (const recordId of uniqueIds) {
+        const [error, record] = await to(this.oTable.getRecordById(recordId))
+        if (error) {
+          console.log(error)
+          continue
+        }
+        if (record) {
+          list.push({
+            recordId,
+            fields: record.fields || {}
+          })
+        }
+      }
+      return list
+    }
     const params = {
       pageSize: 200,
       viewId: this.viewId

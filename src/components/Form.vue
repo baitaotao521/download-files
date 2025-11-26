@@ -327,14 +327,34 @@
       </div>
 
       <div class="btns">
-        <el-button type="primary" @click="submit">
-          {{ $t("download") }}
+        <el-button class="btn-select" @click="downloadSelectedRecords">
+          {{ $t('download_selected_records') }}
+        </el-button>
+        <el-button class="btn-download" type="primary" @click="downloadAllRecords">
+          {{ $t('download_all_records') }}
           <el-icon>
             <Download />
           </el-icon>
         </el-button>
       </div>
     </el-form>
+    <el-dialog
+      v-model="confirmSelectedDialogVis"
+      :title="$t('confirm_dialog_title')"
+      width="360px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :append-to-body="true"
+      class="confirm-selected-dialog"
+    >
+      <p>{{ $t('confirm_download_selected', { count: pendingSelectedIds.length }) }}</p>
+      <template #footer>
+        <div class="dialog-footer-actions">
+          <el-button @click="confirmSelectedDialogVis = false">{{ $t('no') }}</el-button>
+          <el-button type="primary" @click="confirmSelectedDownload">{{ $t('yes') }}</el-button>
+        </div>
+      </template>
+    </el-dialog>
     <el-dialog
       v-model="downModelVis"
       :title="$t('file_download')"
@@ -374,6 +394,8 @@ const $t = i18n.global.t
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
+const confirmSelectedDialogVis = ref(false)
+const pendingSelectedIds = ref([])
 const advancedPanels = ref([])
 const desktopChannels = ['websocket', 'websocket_auth']
 const formData = reactive({
@@ -390,7 +412,8 @@ const formData = reactive({
   secondFolderKey: '',
   wsHost: '127.0.0.1',
   wsPort: 11548,
-  appToken: ''
+  appToken: '',
+  selectedRecordIds: []
 })
 const requiresDesktopClient = computed(() => desktopChannels.includes(formData.downloadChannel))
 const rules = reactive({
@@ -567,6 +590,7 @@ const attachmentList = computed(() => {
 watch(
   () => formData.viewId,
   async(viewId) => {
+    formData.selectedRecordIds = []
     if (viewId && activeTableInfo.value) {
       const table = await bitable.base.getTableById(formData.tableId)
 
@@ -602,6 +626,7 @@ watch(
     formData.attachmentFileds = attachmentList.value.map((e) => e.id)
     formData.firstFolderKey = ''
     formData.secondFolderKey = ''
+    formData.selectedRecordIds = []
   }
 )
 watch(
@@ -619,6 +644,54 @@ watch(
     }
   }
 )
+watch(
+  () => confirmSelectedDialogVis.value,
+  (visible) => {
+    if (!visible) {
+      pendingSelectedIds.value = []
+    }
+  }
+)
+const getSelectedRecordIdList = async() => {
+  try {
+    const selection = await bitable.base.getSelection()
+    const tableId = formData.tableId || selection?.tableId
+    const viewId = formData.viewId || selection?.viewId
+    if (!tableId || !viewId) return []
+    const table = await bitable.base.getTableById(tableId)
+    if (!table) return []
+    const view = await table.getViewById(viewId)
+    if (view && typeof view.getSelectedRecordIdList === 'function') {
+      const list = await view.getSelectedRecordIdList()
+      return Array.isArray(list) ? list : []
+    }
+  } catch (error) {
+    console.error('getSelectedRecordIdList failed', error)
+  }
+  return []
+}
+const downloadSelectedRecords = async() => {
+  const ids = await getSelectedRecordIdList()
+  if (!ids.length) {
+    await bitable.ui.showToast({
+      toastType: 'warning',
+      message: $t('no_selected_records')
+    })
+    return
+  }
+  pendingSelectedIds.value = ids
+  confirmSelectedDialogVis.value = true
+}
+const downloadAllRecords = async() => {
+  formData.selectedRecordIds = []
+  await submit()
+}
+const confirmSelectedDownload = async() => {
+  formData.selectedRecordIds = [...pendingSelectedIds.value]
+  confirmSelectedDialogVis.value = false
+  pendingSelectedIds.value = []
+  await submit()
+}
 const submit = async() => {
   // 获取下载权限（下载和打印归属一个权限）
   const bool = await base.getPermission({
@@ -656,6 +729,7 @@ onMounted(async() => {
   formData.viewId = selection?.viewId || ''
   formData.appToken = selection?.baseId || ''
   formData.attachmentFileds = attachmentList.value.map((e) => e.id)
+  formData.selectedRecordIds = []
 
   loading.value = false
 })
@@ -666,12 +740,24 @@ onMounted(async() => {
 
   .btns {
     display: flex;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
+    gap: 12px;
 
-    .el-button {
+    .btn-select,
+    .btn-download {
       width: 80%;
     }
+  }
+}
+
+.confirm-selected-dialog {
+  .dialog-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    width: 100%;
   }
 }
 
