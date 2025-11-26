@@ -84,10 +84,14 @@ jobs:
           enable-plugins: ${{ matrix.app_config.plugins }}
 
           # 通用资源配置
+          # include-data-dir 只能放目录
           include-data-dir: |
             python_app/locales=python_app/locales
-            python_app/_version.txt=python_app
-          include-data-files: ${{ matrix.os_config.icon }}=${{ matrix.os_config.icon }}
+          # include-data-files 放具体文件 (源路径=目标路径)
+          include-data-files: |
+            ${{ matrix.os_config.icon }}=${{ matrix.os_config.icon }}
+            python_app/_version.txt=python_app/_version.txt
+
           windows-icon-from-ico: ${{ matrix.os_config.icon }}
           macos-app-icon: ${{ matrix.os_config.icon }}
 
