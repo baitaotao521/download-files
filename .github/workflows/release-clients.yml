@@ -90,8 +90,16 @@ jobs:
           echo "::group::Run PyInstaller"
           # 使用外部传入的环境变量构建
           python python_app/build_version.py
-          pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli ${ADD_DATA_ARG} --upx-dir "${UPX_DIR}"
-          pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop ${ADD_DATA_ARG} --upx-dir "${UPX_DIR}" --windowed
+          pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli \
+            --add-data=python_app/locales:python_app/locales \
+            --add-data=public/app.ico:public/app.ico \
+            --add-data=python_app/_version.txt:python_app \
+            --upx-dir "${UPX_DIR}"
+          pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop \
+            --add-data=python_app/locales:python_app/locales \
+            --add-data=public/app.ico:public/app.ico \
+            --add-data=python_app/_version.txt:python_app \
+            --upx-dir "${UPX_DIR}" --windowed
           echo "::endgroup::"
 
           # 移动产物
@@ -259,13 +267,19 @@ jobs:
 
       - name: Build Binaries
         # macOS 使用冒号 : 分隔
-        env:
-          ADD_DATA_ARG: '--add-data=python_app/locales:python_app/locales --add-data=python_app/_version.txt:python_app --add-data=public/app.ico:public/app.ico'
         run: |
           python python_app/build_version.py
           UPX_DIR=$(dirname $(command -v upx))
-          pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli $ADD_DATA_ARG --upx-dir "${UPX_DIR}"
-          pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop $ADD_DATA_ARG --upx-dir "${UPX_DIR}" --windowed
+          pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli \
+            --add-data=python_app/locales:python_app/locales \
+            --add-data=public/app.ico:public/app.ico \
+            --add-data=python_app/_version.txt:python_app \
+            --upx-dir "${UPX_DIR}"
+          pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop \
+            --add-data=python_app/locales:python_app/locales \
+            --add-data=public/app.ico:public/app.ico \
+            --add-data=python_app/_version.txt:python_app \
+            --upx-dir "${UPX_DIR}" --windowed
 
       - name: Prepare artifacts
         run: |
