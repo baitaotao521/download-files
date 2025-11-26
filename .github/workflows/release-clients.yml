@@ -1,315 +1,115 @@
-name: Build Download Clients
+name: Build with Nuitka
 
 on:
   push:
     tags:
       - 'v*'
-      - 'release-*'
 
-# 权限最小化：只保留发布 Release 必需的权限
 permissions:
   contents: write
 
-env:
-  CLI_ENTRY: scripts/ws_downloader.py
-  DESKTOP_ENTRY: scripts/ws_desktop.py
-  # 提取公共参数，减少重复。注意：--add-data 的分隔符由各 Job 动态追加
-  PYINSTALLER_BASE_ARGS: >-
-    --paths .
-    --onefile
-    --noconfirm
-    --collect-all python_app
-    --collect-data python_app.locales
-    --icon public/app.ico
-    --name
-  PYINSTALLER_DATA_POSIX: >-
-    --add-data=python_app/locales:python_app/locales
-    --add-data=python_app/_version.txt:python_app
-    --add-data=public:public
-  PYINSTALLER_DATA_WINDOWS: >-
-    --add-data=python_app/locales;python_app/locales
-    --add-data=python_app/_version.txt;python_app
-    --add-data=public;public
-
 jobs:
-  linux:
-    name: Linux ${{ matrix.arch_tag }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      APP_VERSION: ${{ github.ref_name }}
+  build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
-            arch_tag: x64
-          - platform: linux/arm64
-            arch_tag: arm64
-          - platform: linux/arm/v7
-            arch_tag: armv7
+          - os: windows-latest
+            name: windows-x64
+            # Windows 下的可执行文件后缀
+            ext: .exe
+          - os: ubuntu-latest
+            name: linux-x64
+            ext: ""
+          - os: macos-latest
+            name: macos-x64
+            ext: ""
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.name }}
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build binaries inside container
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          ARCH_TAG: ${{ matrix.arch_tag }}
-        run: |
-          # 创建构建脚本
-          cat <<'EOF' > docker_build.sh
-          #!/usr/bin/env bash
-          set -euo pipefail
-          
-          # 配置环境
-          export HOME=/tmp
-          export PATH="$HOME/.local/bin:$PATH"
-          
-          echo "::group::Install Dependencies"
-          python -m pip install --upgrade pip --user --no-warn-script-location
-          python -m pip install --user -r scripts/requirements.txt --no-warn-script-location
-          python -m pip install --user pyinstaller pillow --no-warn-script-location
-          echo "::endgroup::"
-
-          echo "::group::Setup UPX"
-          export UPX_VERSION=4.2.4
-          case "${ARCH_TAG}" in
-            x64) UPX_PKG_ARCH=amd64_linux ;;
-            arm64) UPX_PKG_ARCH=arm64_linux ;;
-            armv7) UPX_PKG_ARCH=arm_linux ;;
-            *) echo "Unsupported arch ${ARCH_TAG}" >&2; exit 1 ;;
-          esac
-          
-          UPX_ROOT=/tmp/upx-src
-          mkdir -p "${UPX_ROOT}"
-          UPX_ARCHIVE="upx-${UPX_VERSION}-${UPX_PKG_ARCH}.tar.xz"
-          # 增加重试机制
-          curl -L --retry 3 "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${UPX_ARCHIVE}" -o "${UPX_ROOT}/${UPX_ARCHIVE}"
-          tar -C "${UPX_ROOT}" -xf "${UPX_ROOT}/${UPX_ARCHIVE}"
-          export UPX_DIR="${UPX_ROOT}/upx-${UPX_VERSION}-${UPX_PKG_ARCH}"
-          echo "::endgroup::"
-
-          echo "::group::Run PyInstaller"
-          # 使用外部传入的环境变量构建
-          python python_app/build_version.py
-          pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli \
-            ${PYINSTALLER_DATA_POSIX} \
-            --upx-dir "${UPX_DIR}"
-          pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop \
-            ${PYINSTALLER_DATA_POSIX} \
-            --upx-dir "${UPX_DIR}" --windowed
-          echo "::endgroup::"
-
-          # 移动产物
-          mkdir -p artifacts
-          mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-linux-${ARCH_TAG}
-          mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-linux-${ARCH_TAG}
-          
-          # 修复权限，确保外部可以读取
-          chmod -R 777 artifacts
-          EOF
-          
-          chmod +x docker_build.sh
-          
-          # 运行 Docker，挂载 pip 缓存以加速后续构建（如果在同一 Runner 复用时有效）
-          docker run --rm --platform "${PLATFORM}" \
-            -v "${PWD}:/workspace" \
-            -v "${HOME}/.cache/pip:/tmp/.cache/pip" \
-            -w /workspace \
-            -e ARCH_TAG \
-            -e CLI_ENTRY \
-            -e DESKTOP_ENTRY \
-            -e PYINSTALLER_BASE_ARGS="${PYINSTALLER_BASE_ARGS}" \
-            -e PYINSTALLER_DATA_POSIX="${PYINSTALLER_DATA_POSIX}" \
-            -e APP_VERSION \
-            python:3.12 bash /workspace/docker_build.sh
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: feishu-download-clients-linux-${{ matrix.arch_tag }}
-          path: artifacts/*
-          if-no-files-found: error
-
-  windows:
-    name: Windows ${{ matrix.arch_tag }}
-    runs-on: windows-latest
-    timeout-minutes: 45
-    env:
-      APP_VERSION: ${{ github.ref_name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - python_arch: x64
-            arch_tag: x64
-            iscc_arch: x64
-          - python_arch: x86
-            arch_tag: x86
-            iscc_arch: x86
-    steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          architecture: ${{ matrix.python_arch }}
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt pyinstaller pillow
+          pip install -r scripts/requirements.txt
+          # Nuitka 不需要安装在 pip 里，Action 会自己处理，但代码依赖必须装
 
-      - name: Install Build Tools
-        run: choco install upx innosetup -y --no-progress
+      - name: Build CLI with Nuitka
+        uses: Nuitka/Nuitka-Action@v1
+        with:
+          nuitka-version: main
+          script-name: scripts/ws_downloader.py
+          output-file: feishu-downloader-cli${{ matrix.ext }}
+          standalone: true
+          onefile: true
+          # 开启 LTO 链接优化，虽然构建慢但体积更小
+          lto: yes
+          # 包含数据文件 (源路径=目标路径)
+          include-data-dir: |
+            python_app/locales=python_app/locales
+            python_app/_version.txt=python_app
+          include-data-files: public/app.ico=public/app.ico
+          # 针对 Windows 的一些参数
+          windows-icon-from-ico: public/app.ico
+          company-name: "YourCompany"
+          product-name: "Feishu Downloader"
+          file-version: ${{ github.ref_name }}
 
-      - name: Configure paths
-        shell: pwsh
-        run: |
-          $upxDir = Split-Path (Get-Command upx.exe).Source
-          "UPX_DIR=$upxDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build Desktop (GUI) with Nuitka
+        uses: Nuitka/Nuitka-Action@v1
+        with:
+          nuitka-version: main
+          script-name: scripts/ws_desktop.py
+          output-file: feishu-downloader-desktop${{ matrix.ext }}
+          standalone: true
+          onefile: true
+          lto: yes
+          # 禁用控制台窗口 (仅 GUI)
+          windows-disable-console: true
+          macos-disable-console: true
+          # 数据文件
+          include-data-dir: |
+            python_app/locales=python_app/locales
+            python_app/_version.txt=python_app
+          include-data-files: public/app.ico=public/app.ico
+          # 图标与元数据
+          windows-icon-from-ico: public/app.ico
+          macos-app-icon: public/app.ico
+          company-name: "YourCompany"
+          product-name: "Feishu Downloader"
 
-      - name: Build Binaries (Portable)
-        shell: pwsh
-        run: |
-          python python_app/build_version.py
-          # 1. 构建 CLI
-          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli ($env:PYINSTALLER_DATA_WINDOWS -split ' ') --upx-dir "$env:UPX_DIR"
-          
-          # 2. 构建 Desktop (GUI)
-          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop ($env:PYINSTALLER_DATA_WINDOWS -split ' ') --upx-dir "$env:UPX_DIR" --windowed
-
-      - name: Create Installer (Inno Setup)
-        shell: pwsh
-        run: |
-          $appVersion = "${{ github.ref_name }}" -replace "v","" 
-          if ($appVersion -eq "master" -or $appVersion -eq "main") { $appVersion = "1.0.0" }
-          
-          $issContent = @"
-          [Setup]
-          AppName=Feishu Downloader
-          AppVersion=$appVersion
-          DefaultDirName={autopf}\Feishu Downloader
-          DefaultGroupName=Feishu Downloader
-          OutputBaseFilename=feishu-downloader-setup-windows-${{ matrix.arch_tag }}
-          Compression=lzma2
-          SolidCompression=yes
-          ArchitecturesInstallIn64BitMode=${{ matrix.iscc_arch }}
-          DisableProgramGroupPage=yes
-          
-          [Files]
-          Source: "dist\feishu-downloader-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
-          Source: "dist\feishu-downloader-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
-          
-          [Icons]
-          Name: "{group}\Feishu Downloader"; Filename: "{app}\feishu-downloader-desktop.exe"
-          Name: "{autodesktop}\Feishu Downloader"; Filename: "{app}\feishu-downloader-desktop.exe"
-          
-          [Run]
-          Filename: "{app}\feishu-downloader-desktop.exe"; Description: "Launch Feishu Downloader"; Flags: nowait postinstall skipifsilent
-          "@
-          
-          $issContent | Out-File -FilePath "setup.iss" -Encoding UTF8
-          ISCC.exe setup.iss
-
-      - name: Prepare artifacts
-        run: |
-          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-          Move-Item dist\feishu-downloader-cli.exe artifacts\feishu-downloader-cli-windows-${{ matrix.arch_tag }}.exe
-          Move-Item dist\feishu-downloader-desktop.exe artifacts\feishu-downloader-desktop-windows-${{ matrix.arch_tag }}.exe
-          Move-Item Output\feishu-downloader-setup-windows-${{ matrix.arch_tag }}.exe artifacts\
-
-      - name: Upload artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: feishu-download-clients-windows-${{ matrix.arch_tag }}
-          path: artifacts\*
-          if-no-files-found: error
-
-  macos:
-    name: macOS ${{ matrix.arch_tag }}
-    runs-on: ${{ matrix.runner }}
-    env:
-      APP_VERSION: ${{ github.ref_name }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-13
-            arch_tag: x64
-          - runner: macos-14
-            arch_tag: arm64
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip' # 启用 pip 缓存
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt pyinstaller pillow
-
-      - name: Install UPX
-        run: brew install upx
-
-      - name: Build Binaries
-        # macOS 使用冒号 : 分隔
-        run: |
-          python python_app/build_version.py
-          UPX_DIR=$(dirname $(command -v upx))
-          pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli \
-            $PYINSTALLER_DATA_POSIX \
-            --upx-dir "${UPX_DIR}"
-          pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop \
-            $PYINSTALLER_DATA_POSIX \
-            --upx-dir "${UPX_DIR}" --windowed
-
-      - name: Prepare artifacts
-        run: |
-          mkdir -p artifacts
-          mv dist/feishu-downloader-cli artifacts/feishu-downloader-cli-macos-${{ matrix.arch_tag }}
-          mv dist/feishu-downloader-desktop artifacts/feishu-downloader-desktop-macos-${{ matrix.arch_tag }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: feishu-download-clients-macos-${{ matrix.arch_tag }}
-          path: artifacts/*
-          if-no-files-found: error
+          name: build-${{ matrix.name }}
+          path: build/*.bin # Nuitka Action 默认输出在这个目录
+          # 注意：上面的 Action 可能直接输出在根目录，取决于配置，
+          # 建议查看 Action 文档或构建日志确认输出路径。
+          # Nuitka Action 通常会把编译结果放在当前目录或 build 文件夹。
+          path: |
+            *.exe
+            *.bin
+            feishu-downloader-cli*
+            feishu-downloader-desktop*
 
   publish:
-    name: Publish Release Assets
-    needs: [linux, windows, macos]
+    needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # 明确 Release 权限
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: release
-          merge-multiple: true # 自动合并同名目录（如果有），简化结构
+          merge-multiple: true
 
-      - name: List files
-        run: ls -R release
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: release/**/*
-          generate_release_notes: true # 自动生成基于 Git 提交记录的 Release Note
-          fail_on_unmatched_files: true
