@@ -71,7 +71,7 @@ jobs:
       - name: Build CLI
         uses: Nuitka/Nuitka-Action@main
         with:
-          nuitka-version: stable # 推荐使用 stable 而非 main
+          # 删除 nuitka-version: stable，默认使用 PyPI 最新稳定版
           script-name: scripts/ws_downloader.py
           output-file: feishu-downloader-cli${{ matrix.ext }}
           mode: onefile
@@ -84,7 +84,7 @@ jobs:
           include-data-files: ${{ matrix.icon }}=${{ matrix.icon }}
 
           # 元数据
-          company-name: "baitaotao521"
+          company-name: "YourCompany"
           product-name: "Feishu Downloader CLI"
           file-version: ${{ github.ref_name }}
 
@@ -92,7 +92,7 @@ jobs:
       - name: Build Desktop (Tkinter)
         uses: Nuitka/Nuitka-Action@main
         with:
-          nuitka-version: stable
+          # 删除 nuitka-version: stable，默认使用 PyPI 最新稳定版
           script-name: scripts/ws_desktop.py
           output-file: feishu-downloader-desktop${{ matrix.ext }}
           mode: onefile
@@ -113,7 +113,7 @@ jobs:
           macos-app-icon: ${{ matrix.icon }}
 
           # 元数据
-          company-name: "baitaotao521"
+          company-name: "YourCompany"
           product-name: "Feishu Downloader"
           file-version: ${{ github.ref_name }}
 
