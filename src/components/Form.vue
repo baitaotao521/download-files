@@ -341,13 +341,33 @@
     <el-dialog
       v-model="confirmSelectedDialogVis"
       :title="$t('confirm_dialog_title')"
-      width="360px"
+      width="min(360px, 90vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
       :append-to-body="true"
+      :show-close="true"
       class="confirm-selected-dialog"
     >
-      <p>{{ $t('confirm_download_selected', { count: pendingSelectedIds.length }) }}</p>
+      <template #header>
+        <div class="confirm-dialog__header">
+          <el-icon class="confirm-dialog__icon">
+            <WarningFilled />
+          </el-icon>
+          <div class="confirm-dialog__header-text">
+            <p class="confirm-dialog__title">{{ $t('confirm_dialog_title') }}</p>
+            <p class="confirm-dialog__subtitle">{{ $t('download_selected_records') }}</p>
+          </div>
+        </div>
+      </template>
+      <div class="confirm-dialog__content">
+        <p class="confirm-dialog__desc">
+          {{ $t('confirm_download_selected', { count: pendingSelectedIds.length }) }}
+        </p>
+        <div class="confirm-dialog__summary">
+          <span class="confirm-dialog__summary-label">{{ $t('download_selected_records') }}</span>
+          <span class="confirm-dialog__summary-value">{{ pendingSelectedIds.length }}</span>
+        </div>
+      </div>
       <template #footer>
         <div class="dialog-footer-actions">
           <el-button @click="confirmSelectedDialogVis = false">{{ $t('no') }}</el-button>
@@ -383,7 +403,7 @@
 import { ref, onMounted, reactive, toRefs, watch, computed } from 'vue'
 import { bitable, FieldType, base, PermissionEntity, OperationType } from '@lark-base-open/js-sdk'
 
-import { Download, InfoFilled, Tickets } from '@element-plus/icons-vue'
+import { Download, InfoFilled, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import DownModel from './DownModel.vue'
 import draggable from 'vuedraggable'
 
@@ -740,19 +760,95 @@ onMounted(async() => {
 
   .btns {
     display: flex;
-    flex-direction: column;
-    justify-content: center;
+    justify-content: flex-end;
     align-items: center;
     gap: 12px;
+    width: 100%;
+    margin-top: 16px;
 
     .btn-select,
     .btn-download {
-      width: 80%;
+      min-width: 160px;
     }
   }
 }
 
 .confirm-selected-dialog {
+  .el-dialog__header {
+    display: flex;
+    align-items: center;
+    padding: 16px 20px 8px;
+  }
+
+  .el-dialog__body {
+    height: auto;
+    padding: 0 20px 20px;
+  }
+
+  .confirm-dialog__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .confirm-dialog__icon {
+    font-size: 20px;
+    color: var(--el-color-warning);
+    flex-shrink: 0;
+  }
+
+  .confirm-dialog__header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .confirm-dialog__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--N900);
+    margin: 0;
+  }
+
+  .confirm-dialog__subtitle {
+    font-size: 13px;
+    color: var(--N500);
+    margin: 0;
+  }
+
+  .confirm-dialog__content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .confirm-dialog__desc {
+    font-size: 14px;
+    color: var(--N700);
+    margin: 0;
+  }
+
+  .confirm-dialog__summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: 1px solid var(--el-color-warning-light-7);
+    background-color: var(--el-color-warning-light-9);
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+
+  .confirm-dialog__summary-label {
+    font-size: 13px;
+    color: var(--N500);
+  }
+
+  .confirm-dialog__summary-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--el-color-warning);
+  }
+
   .dialog-footer-actions {
     display: flex;
     justify-content: flex-end;
