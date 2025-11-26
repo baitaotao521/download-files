@@ -13,47 +13,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            name: windows-x64
-            ext: .exe
-            icon: public/app.ico
-          - os: ubuntu-latest
-            name: linux-x64
-            ext: ""
-            icon: public/app.ico
-          - os: macos-latest
-            name: macos-x64
-            ext: ""
-            icon: public/app.ico
+        # 第一维：操作系统环境配置
+        os_config:
+          - { os: windows-latest, name: windows-x64, ext: .exe, icon: public/app.ico }
+          - { os: ubuntu-latest,  name: linux-x64,   ext: "",   icon: public/app.ico }
+          - { os: macos-latest,   name: macos-x64,   ext: "",   icon: public/app.ico }
 
-    runs-on: ${{ matrix.os }}
-    name: Build ${{ matrix.name }}
+        # 第二维：应用类型配置 (CLI vs Desktop)
+        # 通过在这里定义差异参数，实现下方构建步骤的统一
+        app_config:
+          - { type: cli,     script: scripts/ws_downloader.py, out_name: feishu-downloader-cli,     console: true,  plugins: "",         product_name: "Feishu Downloader CLI" }
+          - { type: desktop, script: scripts/ws_desktop.py,    out_name: feishu-downloader-desktop, console: false, plugins: "tk-inter", product_name: "Feishu Downloader" }
+
+    runs-on: ${{ matrix.os_config.os }}
+    name: Build ${{ matrix.os_config.name }} (${{ matrix.app_config.type }})
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. 设置 Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip' # 自动缓存 pip 依赖
+          cache: 'pip'
 
-      # 2. 安装系统级依赖 (Linux)
-      # 增加 patchelf (Nuitka打包必须) 和 ccache (加速编译)
       - name: Install System Dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-tk tk-dev tcl-dev patchelf ccache
 
-      # 3. 安装 Python 依赖
       - name: Install Dependencies
         run: pip install -r scripts/requirements.txt
 
-      # 4. 配置 Nuitka 缓存 (显著提升二次构建速度)
+      - name: Parse Version for Nuitka
+        id: parse_version
+        shell: bash
+        run: |
+          RAW="${{ github.ref_name }}"
+          VER="${RAW#v}"
+          VER="${VER%%-*}"
+          if [ -z "$VER" ]; then VER="0.0.0"; fi
+          echo "clean_version=$VER" >> $GITHUB_OUTPUT
+
       - name: Setup Nuitka Cache
         uses: actions/cache@v4
         with:
@@ -62,77 +65,59 @@ jobs:
             ~/.cache/Nuitka
             ~/AppData/Local/Nuitka/Nuitka/Cache
             ~/Library/Caches/Nuitka
-          key: ${{ runner.os }}-nuitka-${{ hashFiles('scripts/requirements.txt') }}-${{ github.ref }}
+          # 缓存 Key 加入了 matrix.app_config.type，区分 CLI 和 Desktop 的缓存，避免冲突
+          key: ${{ runner.os }}-nuitka-${{ matrix.app_config.type }}-${{ hashFiles('scripts/requirements.txt') }}-${{ github.ref }}
           restore-keys: |
-            ${{ runner.os }}-nuitka-${{ hashFiles('scripts/requirements.txt') }}-
-            ${{ runner.os }}-nuitka-
+            ${{ runner.os }}-nuitka-${{ matrix.app_config.type }}-${{ hashFiles('scripts/requirements.txt') }}-
 
-      # 5. 构建 CLI 版本
-      - name: Build CLI
+      # === 统一构建步骤 ===
+      - name: Build ${{ matrix.app_config.type }}
         uses: Nuitka/Nuitka-Action@main
         with:
-          # 删除 nuitka-version: stable，默认使用 PyPI 最新稳定版
-          script-name: scripts/ws_downloader.py
-          output-file: feishu-downloader-cli${{ matrix.ext }}
-          mode: onefile
-          lto: yes # 生产环境开启 LTO 优化体积和性能
-
-          # CLI 专有配置
-          include-data-dir: |
-            python_app/locales=python_app/locales
-            python_app/_version.txt=python_app
-          include-data-files: ${{ matrix.icon }}=${{ matrix.icon }}
-
-          # 元数据
-          company-name: "YourCompany"
-          product-name: "Feishu Downloader CLI"
-          file-version: ${{ github.ref_name }}
-
-      # 6. 构建 Desktop (GUI - Tkinter)
-      - name: Build Desktop (Tkinter)
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          # 删除 nuitka-version: stable，默认使用 PyPI 最新稳定版
-          script-name: scripts/ws_desktop.py
-          output-file: feishu-downloader-desktop${{ matrix.ext }}
+          script-name: ${{ matrix.app_config.script }}
+          output-file: ${{ matrix.app_config.out_name }}${{ matrix.os_config.ext }}
           mode: onefile
           lto: yes
 
-          # === GUI 关键配置 ===
-          enable-plugins: tk-inter
-          enable-console: false # 修正：使用 enable-console: false 替代旧的 disable 参数
+          # 动态参数：由 matrix 控制是否开启控制台、是否启用 tk-inter 插件
+          enable-console: ${{ matrix.app_config.console }}
+          enable-plugins: ${{ matrix.app_config.plugins }}
 
-          # 资源文件
+          # 通用资源配置
           include-data-dir: |
             python_app/locales=python_app/locales
             python_app/_version.txt=python_app
-          include-data-files: ${{ matrix.icon }}=${{ matrix.icon }}
-
-          # 图标配置
-          windows-icon-from-ico: ${{ matrix.icon }}
-          macos-app-icon: ${{ matrix.icon }}
+          include-data-files: ${{ matrix.os_config.icon }}=${{ matrix.os_config.icon }}
+          windows-icon-from-ico: ${{ matrix.os_config.icon }}
+          macos-app-icon: ${{ matrix.os_config.icon }}
 
           # 元数据
           company-name: "YourCompany"
-          product-name: "Feishu Downloader"
-          file-version: ${{ github.ref_name }}
+          product-name: ${{ matrix.app_config.product_name }}
+          file-version: ${{ steps.parse_version.outputs.clean_version }}
 
-      - name: Upload Artifacts
+      # 上传单个构建产物
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.name }}
-          path: |
-            feishu-downloader-cli${{ matrix.ext }}
-            feishu-downloader-desktop${{ matrix.ext }}
+          # 使用包含类型后缀的名称，例如: build-windows-x64-cli
+          name: build-${{ matrix.os_config.name }}-${{ matrix.app_config.type }}
+          path: ${{ matrix.app_config.out_name }}${{ matrix.os_config.ext }}
 
   publish:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # 下载所有构件
       - uses: actions/download-artifact@v4
         with:
+          # 不指定 name 默认下载所有 artifacts
+          # merge-multiple: true 会把所有下载的文件平铺到 path 目录中，自动处理了文件夹嵌套问题
           path: release
           merge-multiple: true
+
+      - name: List Release Files
+        run: ls -R release
 
       - uses: softprops/action-gh-release@v2
         with:
