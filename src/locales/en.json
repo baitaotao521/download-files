@@ -24,6 +24,8 @@
   "websocket_port_placeholder": "Enter port, e.g. 11548",
   "advanced_settings_title": "Advanced Settings",
   "advanced_settings_desc": "Expand to customize the local WebSocket client host and port.",
+  "token_push_batch_label": "Batch size per push",
+  "token_push_batch_hint": "Number of records sent to the desktop client per batch (1-10,000).",
   "download_method": "Download Method",
   "first_directory": "First Directory",
   "second_directory": "Second Directory",
@@ -99,8 +101,10 @@
   "error_websocket_host_required": "Please enter the WebSocket host",
   "error_websocket_port_required": "Please enter the WebSocket port",
   "error_websocket_port_range": "Port must be between 1 and 65535",
+  "error_token_push_batch_required": "Please enter the batch size per push",
+  "error_token_push_batch_range": "Batch size per push must be between 1 and 10,000",
   "websocket_connection_failed": "Connection failed. Please ensure the client is running.",
   "websocket_zip_stage_message": "Python service created a ZIP archive at { path }",
-  "websocket_job_stage_message": "Python service finished the download job."
-
+  "websocket_job_stage_message": "Python service finished the download job.",
+  "token_push_waiting_message": "Push complete. You may close the plugin and wait for the desktop client to finish downloading."
 }

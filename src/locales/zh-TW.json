@@ -24,6 +24,8 @@
   "websocket_port_placeholder": "請輸入服務埠，例如 11548",
   "advanced_settings_title": "高級設定",
   "advanced_settings_desc": "如需自訂本地客戶端 WebSocket 地址，請展開此處設定主機與埠。",
+  "token_push_batch_label": "單次推送筆數",
+  "token_push_batch_hint": "授權碼模式每次向客戶端傳送的最大筆數（1-10000）",
   "download_method": "下載方式",
   "first_directory": "一級目錄",
   "second_directory": "二級目錄",
@@ -99,8 +101,11 @@
   "error_websocket_host_required": "請輸入 WebSocket 主機地址",
   "error_websocket_port_required": "請輸入 WebSocket 埠",
   "error_websocket_port_range": "埠需在 1-65535 之間",
+  "error_token_push_batch_required": "請輸入單次推送筆數",
+  "error_token_push_batch_range": "單次推送筆數需介於 1 到 10000 之間",
   "websocket_connection_failed": "連線失敗，請確認客戶端是否正常啟動",
   "websocket_zip_stage_message": "Python 服務已生成壓縮包：{ path }",
-  "websocket_job_stage_message": "Python 服務已完成下載任務"
+  "websocket_job_stage_message": "Python 服務已完成下載任務",
+  "token_push_waiting_message": "推送完成，可關閉外掛，請等待客戶端下載成功"
 
 }

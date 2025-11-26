@@ -322,6 +322,21 @@
                 style="width: 100%"
               />
             </el-form-item>
+            <el-form-item
+              v-if="formData.downloadChannel === 'websocket_auth'"
+              :label="$t('token_push_batch_label')"
+              prop="tokenPushBatchSize"
+            >
+              <el-input-number
+                v-model="formData.tokenPushBatchSize"
+                :min="1"
+                :max="10000"
+                style="width: 100%"
+              />
+              <p class="advanced-tip">
+                {{ $t('token_push_batch_hint') }}
+              </p>
+            </el-form-item>
           </el-collapse-item>
         </el-collapse>
       </div>
@@ -432,6 +447,7 @@ const formData = reactive({
   secondFolderKey: '',
   wsHost: '127.0.0.1',
   wsPort: 11548,
+  tokenPushBatchSize: 50,
   appToken: '',
   selectedRecordIds: []
 })
@@ -529,6 +545,27 @@ const rules = reactive({
         const port = Number(value)
         if (!Number.isInteger(port) || port < 1 || port > 65535) {
           callback(new Error($t('error_websocket_port_range')))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }
+  ],
+  tokenPushBatchSize: [
+    {
+      validator: (rule, value, callback) => {
+        if (formData.downloadChannel !== 'websocket_auth') {
+          callback()
+          return
+        }
+        if (value === undefined || value === null || value === '') {
+          callback(new Error($t('error_token_push_batch_required')))
+          return
+        }
+        const num = Number(value)
+        if (!Number.isInteger(num) || num < 1 || num > 10000) {
+          callback(new Error($t('error_token_push_batch_range')))
           return
         }
         callback()
@@ -661,6 +698,14 @@ watch(
   (newVal) => {
     if (!newVal && formData.firstFolderKey) {
       elform.value.validateField('secondFolderKey')
+    }
+  }
+)
+watch(
+  () => formData.downloadChannel,
+  (channel) => {
+    if (channel !== 'websocket_auth' && elform.value) {
+      elform.value.clearValidate('tokenPushBatchSize')
     }
   }
 )

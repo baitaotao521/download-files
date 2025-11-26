@@ -24,6 +24,8 @@
     "websocket_port_placeholder": "サービスポートを入力してください (例: 11548)",
     "advanced_settings_title": "詳細設定",
     "advanced_settings_desc": "ローカルクライアントの WebSocket ホストとポートを変更する場合は展開して設定してください。",
+    "token_push_batch_label": "1 回の送信件数",
+    "token_push_batch_hint": "認証コードモードでクライアントへ送信する件数（1〜10,000）",
     "download_method": "ダウンロード方法",
     "first_directory": "1次ディレクトリ",
     "second_directory": "2次ディレクトリ",
@@ -99,7 +101,10 @@
     "error_websocket_host_required": "WebSocket ホストを入力してください",
     "error_websocket_port_required": "WebSocket ポートを入力してください",
     "error_websocket_port_range": "ポートは1～65535の範囲で指定してください",
+    "error_token_push_batch_required": "1 回の送信件数を入力してください",
+    "error_token_push_batch_range": "1 回の送信件数は 1 以上 10,000 以下である必要があります",
     "websocket_connection_failed": "接続に失敗しました。クライアントが正常に起動しているか確認してください。",
     "websocket_zip_stage_message": "Python サービスが ZIP アーカイブを生成しました: { path }",
-    "websocket_job_stage_message": "Python サービスのダウンロードタスクが完了しました。"
+    "websocket_job_stage_message": "Python サービスのダウンロードタスクが完了しました。",
+    "token_push_waiting_message": "送信が完了しました。プラグインを閉じても構いません。クライアント側の完了をお待ちください。"
 }

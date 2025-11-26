@@ -27,7 +27,7 @@ const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
 class TokenDispatcher {
   /**
-   * 控制鉴权码推送速率，默认 1 秒最多 50 次。
+   * 控制鉴权码推送速率，可配置 1 秒内推送的条数。
    */
   constructor(limit = 50, windowMs = 1000) {
     this.limit = limit
@@ -71,7 +71,8 @@ class FileDownloader {
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
-    this.tokenDispatcher = new TokenDispatcher()
+    const pushLimit = Number(this.tokenPushBatchSize) || 50
+    this.tokenDispatcher = new TokenDispatcher(pushLimit)
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
@@ -474,6 +475,11 @@ class FileDownloader {
           })
           stopAllDownloads(error)
         }
+      }
+      if (!abortDownloads && useTokenMode) {
+        this.emit('zip_progress', {
+          message: $t('token_push_waiting_message')
+        })
       }
       if (!abortDownloads) {
         this._sendWebSocketMessage(socket, {
