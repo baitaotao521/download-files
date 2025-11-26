@@ -20,6 +20,7 @@ env:
     --noconfirm
     --collect-all python_app
     --collect-data python_app.locales
+    --icon public/app.ico
     --name
 
 jobs:
@@ -27,6 +28,8 @@ jobs:
     name: Linux ${{ matrix.arch_tag }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      APP_VERSION: ${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -49,7 +52,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           ARCH_TAG: ${{ matrix.arch_tag }}
           # Linux 使用冒号分隔
-          ADD_DATA_ARG: "--add-data=python_app/locales:python_app/locales"
+          ADD_DATA_ARG: "--add-data=python_app/locales:python_app/locales --add-data=public/app.ico:public/app.ico --add-data=python_app/_version.txt:python_app"
         run: |
           # 创建构建脚本
           cat <<'EOF' > docker_build.sh
@@ -86,6 +89,7 @@ jobs:
 
           echo "::group::Run PyInstaller"
           # 使用外部传入的环境变量构建
+          python python_app/build_version.py
           pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli ${ADD_DATA_ARG} --upx-dir "${UPX_DIR}"
           pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop ${ADD_DATA_ARG} --upx-dir "${UPX_DIR}" --windowed
           echo "::endgroup::"
@@ -111,6 +115,7 @@ jobs:
             -e DESKTOP_ENTRY \
             -e PYINSTALLER_BASE_ARGS="${PYINSTALLER_BASE_ARGS}" \
             -e ADD_DATA_ARG="${ADD_DATA_ARG}" \
+            -e APP_VERSION \
             python:3.12 bash /workspace/docker_build.sh
 
       - name: Upload artifact
@@ -124,6 +129,8 @@ jobs:
     name: Windows ${{ matrix.arch_tag }}
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      APP_VERSION: ${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -164,8 +171,9 @@ jobs:
         shell: pwsh
         env:
           # 修复点：移除了 --add-data 值中的双引号
-          ADD_DATA_ARG: '--add-data=python_app/locales;python_app/locales'
+          ADD_DATA_ARG: '--add-data=python_app/locales;python_app/locales --add-data=public/app.ico;public/app.ico --add-data=python_app/_version.txt;python_app'
         run: |
+          python python_app/build_version.py
           # 1. 构建 CLI
           pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR"
           
@@ -252,8 +260,9 @@ jobs:
       - name: Build Binaries
         # macOS 使用冒号 : 分隔
         env:
-          ADD_DATA_ARG: '--add-data=python_app/locales:python_app/locales'
+          ADD_DATA_ARG: '--add-data=python_app/locales:python_app/locales --add-data=python_app/_version.txt:python_app --add-data=public/app.ico:public/app.ico'
         run: |
+          python python_app/build_version.py
           UPX_DIR=$(dirname $(command -v upx))
           pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli $ADD_DATA_ARG --upx-dir "${UPX_DIR}"
           pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop $ADD_DATA_ARG --upx-dir "${UPX_DIR}" --windowed
