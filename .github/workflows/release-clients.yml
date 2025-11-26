@@ -45,7 +45,10 @@ jobs:
           sudo apt-get install -y python3-tk tk-dev tcl-dev patchelf ccache
 
       - name: Install Dependencies
-        run: pip install -r scripts/requirements.txt
+        run: |
+          pip install -r scripts/requirements.txt
+          # Nuitka 需要 imageio 来转换图标格式 (如 .ico -> .icns)
+          pip install imageio
 
       - name: Parse Version for Nuitka
         id: parse_version
@@ -106,7 +109,9 @@ jobs:
         with:
           # 使用包含类型后缀的名称，例如: build-windows-x64-cli
           name: build-${{ matrix.os_config.name }}-${{ matrix.app_config.type }}
-          path: ${{ matrix.app_config.out_name }}${{ matrix.os_config.ext }}
+          # 修正：根据日志确认 Nuitka 将文件输出到了 build/ 目录
+          # 直接指定准确路径，不再使用通配符猜测
+          path: build/${{ matrix.app_config.out_name }}${{ matrix.os_config.ext }}
 
   publish:
     needs: build
