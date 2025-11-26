@@ -177,16 +177,21 @@ jobs:
 
       - name: Build Binaries (Portable)
         shell: pwsh
-        env:
-          # 修复点：移除了 --add-data 值中的双引号
-          ADD_DATA_ARG: '--add-data=python_app/locales;python_app/locales --add-data=public/app.ico;public/app.ico --add-data=python_app/_version.txt;python_app'
         run: |
           python python_app/build_version.py
           # 1. 构建 CLI
-          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR"
+          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli `
+            --add-data=python_app/locales;python_app/locales `
+            --add-data=public/app.ico;public/app.ico `
+            --add-data=python_app/_version.txt;python_app `
+            --upx-dir "$env:UPX_DIR"
           
           # 2. 构建 Desktop (GUI)
-          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR" --windowed
+          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop `
+            --add-data=python_app/locales;python_app/locales `
+            --add-data=public/app.ico;public/app.ico `
+            --add-data=python_app/_version.txt;python_app `
+            --upx-dir "$env:UPX_DIR" --windowed
 
       - name: Create Installer (Inno Setup)
         shell: pwsh
@@ -238,6 +243,8 @@ jobs:
   macos:
     name: macOS ${{ matrix.arch_tag }}
     runs-on: ${{ matrix.runner }}
+    env:
+      APP_VERSION: ${{ github.ref_name }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
