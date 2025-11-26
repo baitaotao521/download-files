@@ -39,7 +39,8 @@ class TokenDispatcher {
    * 获取一个可发送鉴权码的时间窗口，必要时等待。
    */
   async acquire(shouldAbort) {
-    while (true) {
+    let acquired = false
+    while (!acquired) {
       if (typeof shouldAbort === 'function' && shouldAbort()) {
         return
       }
@@ -47,10 +48,11 @@ class TokenDispatcher {
       this.timeline = this.timeline.filter((timestamp) => now - timestamp < this.windowMs)
       if (this.timeline.length < this.limit) {
         this.timeline.push(now)
-        return
+        acquired = true
+      } else {
+        const waitTime = this.windowMs - (now - this.timeline[0])
+        await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
       }
-      const waitTime = this.windowMs - (now - this.timeline[0])
-      await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
     }
   }
 }
@@ -276,10 +278,10 @@ class FileDownloader {
       return current
     }
     const runners = Array.from({ length: limit }, async() => {
-      while (true) {
-        const item = pick()
-        if (!item) break
+      let item = pick()
+      while (item) {
         await worker(item)
+        item = pick()
       }
     })
     await Promise.all(runners)
@@ -425,9 +427,9 @@ class FileDownloader {
           downloadMode: useTokenMode ? 'token' : 'url',
           ...(useTokenMode
             ? {
-                tableId: this.tableId,
-                appToken: this.appToken
-              }
+              tableId: this.tableId,
+              appToken: this.appToken
+            }
             : {})
         }
       })
