@@ -66,7 +66,7 @@ jobs:
           echo "::group::Install Dependencies"
           python -m pip install --upgrade pip --user --no-warn-script-location
           python -m pip install --user -r scripts/requirements.txt --no-warn-script-location
-          python -m pip install --user pyinstaller --no-warn-script-location
+          python -m pip install --user pyinstaller pillow --no-warn-script-location
           echo "::endgroup::"
 
           echo "::group::Setup UPX"
@@ -163,7 +163,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt pyinstaller
+          pip install -r scripts/requirements.txt pyinstaller pillow
 
       - name: Install Build Tools
         run: choco install upx innosetup -y --no-progress
@@ -179,19 +179,16 @@ jobs:
         shell: pwsh
         run: |
           python python_app/build_version.py
+          $addDataArgs = @(
+            '--add-data=python_app/locales;python_app/locales',
+            '--add-data=public/app.ico;public/app.ico',
+            '--add-data=python_app/_version.txt;python_app'
+          )
           # 1. 构建 CLI
-          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli `
-            --add-data=python_app/locales;python_app/locales `
-            --add-data=public/app.ico;public/app.ico `
-            --add-data=python_app/_version.txt;python_app `
-            --upx-dir "$env:UPX_DIR"
+          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $addDataArgs --upx-dir "$env:UPX_DIR"
           
           # 2. 构建 Desktop (GUI)
-          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop `
-            --add-data=python_app/locales;python_app/locales `
-            --add-data=public/app.ico;public/app.ico `
-            --add-data=python_app/_version.txt;python_app `
-            --upx-dir "$env:UPX_DIR" --windowed
+          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop $addDataArgs --upx-dir "$env:UPX_DIR" --windowed
 
       - name: Create Installer (Inno Setup)
         shell: pwsh
@@ -267,7 +264,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt pyinstaller
+          pip install -r scripts/requirements.txt pyinstaller pillow
 
       - name: Install UPX
         run: brew install upx
