@@ -22,6 +22,14 @@ env:
     --collect-data python_app.locales
     --icon public/app.ico
     --name
+  PYINSTALLER_DATA_POSIX: >-
+    --add-data=python_app/locales:python_app/locales
+    --add-data=python_app/_version.txt:python_app
+    --add-data=public:public
+  PYINSTALLER_DATA_WINDOWS: >-
+    --add-data=python_app/locales;python_app/locales
+    --add-data=python_app/_version.txt;python_app
+    --add-data=public;public
 
 jobs:
   linux:
@@ -51,8 +59,6 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH_TAG: ${{ matrix.arch_tag }}
-          # Linux 使用冒号分隔
-          ADD_DATA_ARG: "--add-data=python_app/locales:python_app/locales --add-data=public/app.ico:public/app.ico --add-data=python_app/_version.txt:python_app"
         run: |
           # 创建构建脚本
           cat <<'EOF' > docker_build.sh
@@ -91,14 +97,10 @@ jobs:
           # 使用外部传入的环境变量构建
           python python_app/build_version.py
           pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli \
-            --add-data=python_app/locales:python_app/locales \
-            --add-data=public/app.ico:public/app.ico \
-            --add-data=python_app/_version.txt:python_app \
+            ${PYINSTALLER_DATA_POSIX} \
             --upx-dir "${UPX_DIR}"
           pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop \
-            --add-data=python_app/locales:python_app/locales \
-            --add-data=public/app.ico:public/app.ico \
-            --add-data=python_app/_version.txt:python_app \
+            ${PYINSTALLER_DATA_POSIX} \
             --upx-dir "${UPX_DIR}" --windowed
           echo "::endgroup::"
 
@@ -122,7 +124,7 @@ jobs:
             -e CLI_ENTRY \
             -e DESKTOP_ENTRY \
             -e PYINSTALLER_BASE_ARGS="${PYINSTALLER_BASE_ARGS}" \
-            -e ADD_DATA_ARG="${ADD_DATA_ARG}" \
+            -e PYINSTALLER_DATA_POSIX="${PYINSTALLER_DATA_POSIX}" \
             -e APP_VERSION \
             python:3.12 bash /workspace/docker_build.sh
 
@@ -179,16 +181,11 @@ jobs:
         shell: pwsh
         run: |
           python python_app/build_version.py
-          $addDataArgs = @(
-            '--add-data=python_app/locales;python_app/locales',
-            '--add-data=public/app.ico;public/app.ico',
-            '--add-data=python_app/_version.txt;python_app'
-          )
           # 1. 构建 CLI
-          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $addDataArgs --upx-dir "$env:UPX_DIR"
+          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli ($env:PYINSTALLER_DATA_WINDOWS -split ' ') --upx-dir "$env:UPX_DIR"
           
           # 2. 构建 Desktop (GUI)
-          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop $addDataArgs --upx-dir "$env:UPX_DIR" --windowed
+          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop ($env:PYINSTALLER_DATA_WINDOWS -split ' ') --upx-dir "$env:UPX_DIR" --windowed
 
       - name: Create Installer (Inno Setup)
         shell: pwsh
@@ -275,14 +272,10 @@ jobs:
           python python_app/build_version.py
           UPX_DIR=$(dirname $(command -v upx))
           pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli \
-            --add-data=python_app/locales:python_app/locales \
-            --add-data=public/app.ico:public/app.ico \
-            --add-data=python_app/_version.txt:python_app \
+            $PYINSTALLER_DATA_POSIX \
             --upx-dir "${UPX_DIR}"
           pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop \
-            --add-data=python_app/locales:python_app/locales \
-            --add-data=public/app.ico:public/app.ico \
-            --add-data=python_app/_version.txt:python_app \
+            $PYINSTALLER_DATA_POSIX \
             --upx-dir "${UPX_DIR}" --windowed
 
       - name: Prepare artifacts

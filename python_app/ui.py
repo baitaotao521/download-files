@@ -599,7 +599,7 @@ class DownloaderDesktopApp:
     base_title = self._t('title')
     version = (self.app_version or '').strip()
     if version:
-      base_title = f'{base_title} v{version}'
+      base_title = f'{base_title} {version}'
     self.root.title(base_title)
 
   def _refresh_status_text(self) -> None:
