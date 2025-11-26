@@ -9,7 +9,10 @@ from typing import Dict
 LOCALES_DIR = Path(__file__).with_name('locales')
 TRANSLATION_FILES = {
   'zh': 'zh.json',
+  'zh-TW': 'zh-TW.json',
   'en': 'en.json',
+  'es': 'es.json',
+  'ru': 'ru.json',
   'ja': 'ja.json'
 }
 
@@ -33,11 +36,31 @@ TRANSLATIONS = _load_translations()
 
 SUPPORTED_LANGUAGES = [
   ('简体中文', 'zh'),
+  ('繁體中文', 'zh-TW'),
   ('English', 'en'),
+  ('Español', 'es'),
+  ('Русский', 'ru'),
   ('日本語', 'ja')
 ]
 
 DEFAULT_LANGUAGE = 'zh'
+
+
+def normalize_locale(locale: str) -> str:
+  """标准化语言代码，兼容 zh-TW、es-ES 等区域化标识。"""
+  if not locale:
+    return DEFAULT_LANGUAGE
+  lowered = locale.replace('_', '-').lower()
+  # 精确匹配
+  for key in TRANSLATION_FILES:
+    if lowered == key.lower():
+      return key
+  # 基础语言匹配
+  base = lowered.split('-')[0]
+  for key in TRANSLATION_FILES:
+    if key.lower().split('-')[0] == base:
+      return key
+  return DEFAULT_LANGUAGE
 
 
 @dataclass
@@ -47,9 +70,10 @@ class Localizer:
   locale: str = DEFAULT_LANGUAGE
 
   def set_locale(self, locale: str) -> None:
-    """更新当前语言。"""
-    if locale in TRANSLATIONS:
-      self.locale = locale
+    """更新当前语言并进行代码规范化。"""
+    normalized = normalize_locale(locale)
+    if normalized in TRANSLATIONS:
+      self.locale = normalized
     else:
       self.locale = DEFAULT_LANGUAGE
 

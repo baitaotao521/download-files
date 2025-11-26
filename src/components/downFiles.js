@@ -6,7 +6,6 @@ import { chunkArrayByMaxSize } from '@/utils/index.js'
 
 import { i18n } from '@/locales/i18n.js'
 import to from 'await-to-js'
-import { SuperTask } from '@/utils/SuperTask.js'
 
 import {
   removeSpecialChars,
@@ -25,7 +24,40 @@ const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
 const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
+class TokenDispatcher {
+  /**
+   * 控制鉴权码推送速率，默认 1 秒最多 50 次。
+   */
+  constructor(limit = 50, windowMs = 1000) {
+    this.limit = limit
+    this.windowMs = windowMs
+    this.timeline = []
+  }
+
+  /**
+   * 获取一个可发送鉴权码的时间窗口，必要时等待。
+   */
+  async acquire(shouldAbort) {
+    while (true) {
+      if (typeof shouldAbort === 'function' && shouldAbort()) {
+        return
+      }
+      const now = Date.now()
+      this.timeline = this.timeline.filter((timestamp) => now - timestamp < this.windowMs)
+      if (this.timeline.length < this.limit) {
+        this.timeline.push(now)
+        return
+      }
+      const waitTime = this.windowMs - (now - this.timeline[0])
+      await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
+    }
+  }
+}
+
 class FileDownloader {
+  /**
+   * 基于表单配置初始化下载器。
+   */
   constructor(formData) {
     Object.keys(formData).map((key) => {
       this[key] = formData[key]
@@ -33,11 +65,10 @@ class FileDownloader {
 
     this.oTable = null
 
-    this.currentTotalSize = 0
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
-    this._tokenPushTimeline = []
+    this.tokenDispatcher = new TokenDispatcher()
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
@@ -51,6 +82,9 @@ class FileDownloader {
   isTokenWebSocketChannel() {
     return this.downloadChannel === 'websocket_auth'
   }
+  /**
+   * 分页拉取记录列表，返回聚合后的记录数据。
+   */
   async loopGetRecordIdList(list = [], pageToken) {
     const params = {
       pageSize: 200,
@@ -74,6 +108,9 @@ class FileDownloader {
 
     return list
   }
+  /**
+   * 组装附件单元格列表，补齐路径、顺序等信息。
+   */
   async getCellsList() {
     const oRecordList = await this.loopGetRecordIdList()
     let cellList = []
@@ -103,7 +140,9 @@ class FileDownloader {
     return cellList
   }
 
-  // 注册进度事件监听器
+  /**
+   * 注册进度事件监听器。
+   */
   on(event, callback) {
     if (!this[event + 'Listeners']) {
       this[event + 'Listeners'] = []
@@ -112,11 +151,17 @@ class FileDownloader {
 
     return this
   }
+  /**
+   * 触发指定类型的事件。
+   */
   emit(type, messgae) {
     this[type + 'Listeners']?.forEach((listener) => {
       listener(messgae)
     })
   }
+  /**
+   * 按照字段规则批量重命名附件。
+   */
   async setFileNames() {
     if (this.fileNameType !== 1) return
     const targetFieldIds = this.fileNameByField
@@ -150,6 +195,9 @@ class FileDownloader {
       updateCellNames(this.cellList[index], name)
     })
   }
+  /**
+   * 设置附件的目录路径（一级/二级目录）。
+   */
   async setFolderPath() {
     // 逐个下载
     if (this.downloadType !== 1) return
@@ -180,6 +228,9 @@ class FileDownloader {
       )
     )
   }
+  /**
+   * 生成不重复的文件名，避免覆盖。
+   */
   getUniqueFileName(name, path) {
     const fileExtension = name.substring(name.lastIndexOf('.'))
     const baseName = name.substring(0, name.lastIndexOf('.'))
@@ -191,8 +242,11 @@ class FileDownloader {
     this.nameSpace.add(path + name)
     return name
   }
+  /**
+   * 按 ZIP 包体积切片并串行写入压缩包。
+   */
   async zipDownLoad() {
-    const { chunks: zipsList, maxChunks: maxChunksList, total } = chunkArrayByMaxSize(this.cellList, MAX_ZIP_SIZE)
+    const { chunks: zipsList, maxChunks: maxChunksList } = chunkArrayByMaxSize(this.cellList, MAX_ZIP_SIZE)
     if (zipsList.length > 1) {
       this.emit('warn', $t('text19', { length: zipsList.length }))
     }
@@ -200,17 +254,11 @@ class FileDownloader {
       this.emit('warn', $t('text20', { length: maxChunksList.length }))
     }
 
-    const concurrency = this.concurrentDownloads || 5
     for (const zipList of zipsList) {
       this.zip = new JSZip()
-      this.currentTotalSize = 0 // 重置当前总大小
-      const superTask = new SuperTask(concurrency)
-      const tasks = zipList.map((fileInfo) => {
-        return async() => await this.processFile(fileInfo)
-      })
-      superTask.setTasks(tasks)
-
-      await superTask.finished().catch((errors) => {})
+      for (const fileInfo of zipList) {
+        await this.processFile(fileInfo)
+      }
       const [err, content] = await to(this.zip.generateAsync(
         { type: 'blob' },
         (metadata) => {
@@ -229,6 +277,9 @@ class FileDownloader {
       await this.sigleDownLoad(fileInfo)
     }
   }
+  /**
+   * 获取附件直链并应用唯一文件名。
+   */
   async getAttachmentUrl(fileInfo) {
     const { token, fieldId, recordId, path, name } = fileInfo
 
@@ -239,7 +290,9 @@ class FileDownloader {
       recordId
     )
   }
-  // 处理单个文件的异步函数
+  /**
+   * 处理单个文件，获取内容并写入当前 Zip。
+   */
   async processFile(fileInfo) {
     await this.getAttachmentUrl(fileInfo)
 
@@ -249,6 +302,9 @@ class FileDownloader {
       this.zip.file(`${fileInfo.path}${fileInfo.name}`, blob)
     }
   }
+  /**
+   * 浏览器单文件串行下载。
+   */
   async sigleDownLoad(file) {
     const cellList = file ? [file] : this.cellList
     const downLocal = async(fileInfo) => {
@@ -270,27 +326,40 @@ class FileDownloader {
     }
   }
   /**
-   * 将附件临时链接推送给本地 Python WebSocket 服务端。
+   * 通过浏览器串行下载：根据选择切换 zip 或逐个下载。
+   */
+  async _downloadViaBrowser() {
+    if (this.downloadType === 2) {
+      await this.sigleDownLoad()
+      return
+    }
+    await this.zipDownLoad()
+  }
+  /**
+   * 兼容旧调用的桌面客户端下载入口。
    */
   async websocketDownload() {
+    return this._downloadViaDesktop()
+  }
+  /**
+   * 本地客户端下载：串行发送链接或鉴权码。
+   */
+  async _downloadViaDesktop() {
     const wsUrl = this._buildWebSocketUrl()
     const socket = await this._createWebSocket(wsUrl)
     let abortDownloads = false
-    let abortReason = null
-    let superTask = null
     const stopAllDownloads = (reason) => {
       if (abortDownloads) return
       abortDownloads = true
-      abortReason = reason instanceof Error ? reason : new Error(reason || $t('file_download_failed'))
-      if (superTask) {
-        superTask.cancel(abortReason)
+      const message = reason?.message || reason
+      if (message) {
+        this.emit('warn', message)
       }
     }
     const completion = this._bindWebSocketLifecycle(socket, {
       onFatalError: stopAllDownloads
     })
     const jobId = `${Date.now()}`
-    const concurrency = Math.max(1, Number(this.concurrentDownloads) || 5)
     const useTokenMode = this.isTokenWebSocketChannel()
     if (useTokenMode && !this.appToken) {
       throw new Error($t('error_app_token_missing'))
@@ -299,7 +368,7 @@ class FileDownloader {
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_CONFIG_TYPE,
         data: {
-          concurrent: concurrency,
+          concurrent: 1,
           zipAfterDownload: this.downloadType === 1,
           jobId,
           jobName: this.zipName || jobId,
@@ -314,62 +383,48 @@ class FileDownloader {
             : {})
         }
       })
-      // 并行预取附件链接，避免串行等待造成阻塞
-      superTask = new SuperTask(concurrency)
-      if (abortDownloads) {
-        superTask.cancel(abortReason || new Error($t('file_download_failed')))
-        await completion.catch(() => {})
-        return
-      }
-      const tasks = this.cellList.map((fileInfo) => {
-        return async() => {
-          if (abortDownloads) return
-          const { order } = fileInfo
-          try {
-            if (!useTokenMode) {
-              await this.getAttachmentUrl(fileInfo)
-            }
-            if (abortDownloads) return
-            this.emit('progress', {
-              index: order,
-              name: fileInfo.name,
-              size: fileInfo.size,
-              percentage: 0
-            })
-            const payload = {
-              name: fileInfo.name,
-              path: fileInfo.path,
-              order: fileInfo.order,
-              size: fileInfo.size
-            }
-            if (useTokenMode) {
-              payload.token = fileInfo.token
-              payload.fieldId = fileInfo.fieldId
-              payload.recordId = fileInfo.recordId
-            } else {
-              payload.downloadUrl = fileInfo.fileUrl
-            }
-            if (abortDownloads) return
-            if (useTokenMode) {
-              await this._acquireTokenModeSlot(() => abortDownloads)
-            }
-            if (abortDownloads) return
-            this._sendWebSocketMessage(socket, {
-              type: WEBSOCKET_LINK_TYPE,
-              data: payload
-            })
-          } catch (error) {
-            const message = error?.message || $t('file_download_failed')
-            this.emit('error', {
-              index: order,
-              message
-            })
-            throw error
+      for (const fileInfo of this.cellList) {
+        if (abortDownloads) break
+        const { order } = fileInfo
+        try {
+          if (!useTokenMode) {
+            await this.getAttachmentUrl(fileInfo)
           }
+          if (abortDownloads) break
+          this.emit('progress', {
+            index: order,
+            name: fileInfo.name,
+            size: fileInfo.size,
+            percentage: 0
+          })
+          const payload = {
+            name: fileInfo.name,
+            path: fileInfo.path,
+            order: fileInfo.order,
+            size: fileInfo.size
+          }
+          if (useTokenMode) {
+            payload.token = fileInfo.token
+            payload.fieldId = fileInfo.fieldId
+            payload.recordId = fileInfo.recordId
+            await this._acquireTokenModeSlot(() => abortDownloads)
+          } else {
+            payload.downloadUrl = fileInfo.fileUrl
+          }
+          if (abortDownloads) break
+          this._sendWebSocketMessage(socket, {
+            type: WEBSOCKET_LINK_TYPE,
+            data: payload
+          })
+        } catch (error) {
+          const message = error?.message || $t('file_download_failed')
+          this.emit('error', {
+            index: order,
+            message
+          })
+          stopAllDownloads(error)
         }
-      })
-      superTask.setTasks(tasks)
-      await superTask.finished().catch(() => {})
+      }
       if (!abortDownloads) {
         this._sendWebSocketMessage(socket, {
           type: WEBSOCKET_COMPLETE_TYPE,
@@ -527,29 +582,16 @@ class FileDownloader {
     socket.send(JSON.stringify(payload))
   }
 
+  /**
+   * 控制鉴权码推送频率，使用限流器保证 1 秒最多 5 次。
+   */
   async _acquireTokenModeSlot(shouldAbort) {
-    const limit = 5
-    const windowMs = 1000
-    if (!this._tokenPushTimeline) {
-      this._tokenPushTimeline = []
-    }
-    while (true) {
-      if (typeof shouldAbort === 'function' && shouldAbort()) {
-        return
-      }
-      const now = Date.now()
-      this._tokenPushTimeline = this._tokenPushTimeline.filter(
-        (timestamp) => now - timestamp < windowMs
-      )
-      if (this._tokenPushTimeline.length < limit) {
-        this._tokenPushTimeline.push(now)
-        return
-      }
-      const waitTime = windowMs - (now - this._tokenPushTimeline[0])
-      await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
-    }
+    await this.tokenDispatcher.acquire(shouldAbort)
   }
 
+  /**
+   * 下载单个文件并上报进度。
+   */
   async downloadFile(fileInfo) {
     const { fileUrl, name, order, size } = fileInfo
     let isDownloadComplete = false // 新增变量，用于跟踪下载是否完成
@@ -595,6 +637,9 @@ class FileDownloader {
     return response.data
   }
 
+  /**
+   * 按通道选择下载策略并串行执行。
+   */
   async startDownload() {
     this.oTable = await bitable.base.getTableById(this.tableId)
     // 获取所有附件信息
@@ -610,12 +655,9 @@ class FileDownloader {
     }
     try {
       if (this.isWebSocketChannel()) {
-        await this.websocketDownload()
-      } else if (this.downloadType === 2) {
-        // 逐个下载
-        await this.sigleDownLoad()
+        await this._downloadViaDesktop()
       } else {
-        await this.zipDownLoad()
+        await this._downloadViaBrowser()
       }
     } catch (error) {
       console.error('download failed', error)

@@ -14,6 +14,7 @@ DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 11548
 DEFAULT_OUTPUT_DIR = 'downloads'
 DEFAULT_LANGUAGE = 'zh'
+DEFAULT_FILE_DISPLAY_LIMIT = 1000
 
 
 @dataclass
@@ -25,6 +26,7 @@ class UserPreferences:
   output_dir: str = DEFAULT_OUTPUT_DIR
   language: str = DEFAULT_LANGUAGE
   personal_base_token: str = ''
+  file_display_limit: int = DEFAULT_FILE_DISPLAY_LIMIT
 
 
 def _coerce_port(value: Any) -> int:
@@ -50,13 +52,28 @@ def load_user_config() -> UserPreferences:
   output_dir = str(data.get('output_dir') or DEFAULT_OUTPUT_DIR)
   language = str(data.get('language') or DEFAULT_LANGUAGE)
   personal_base_token = str(data.get('personal_base_token') or '')
+  file_display_limit = _coerce_file_limit(data.get('file_display_limit'))
   return UserPreferences(
     host=host,
     port=port,
     output_dir=output_dir,
     language=language,
-    personal_base_token=personal_base_token
+    personal_base_token=personal_base_token,
+    file_display_limit=file_display_limit
   )
+
+
+def _coerce_file_limit(value: Any) -> int:
+  """将文件展示数量限制转换为合理范围。"""
+  try:
+    parsed = int(value)
+  except (TypeError, ValueError):
+    return DEFAULT_FILE_DISPLAY_LIMIT
+  if parsed < 100:
+    return 100
+  if parsed > 5000:
+    return 5000
+  return parsed
 
 
 def save_user_config(preferences: UserPreferences) -> None:

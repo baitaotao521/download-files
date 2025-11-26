@@ -388,7 +388,6 @@ const formData = reactive({
   downloadTypeByFolders: false,
   firstFolderKey: '',
   secondFolderKey: '',
-  concurrentDownloads: 5,
   wsHost: '127.0.0.1',
   wsPort: 11548,
   appToken: ''
