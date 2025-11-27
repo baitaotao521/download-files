@@ -322,19 +322,74 @@
                 style="width: 100%"
               />
             </el-form-item>
+            <el-form-item
+              v-if="formData.downloadChannel === 'websocket_auth'"
+              :label="$t('token_push_batch_label')"
+              prop="tokenPushBatchSize"
+            >
+              <el-input-number
+                v-model="formData.tokenPushBatchSize"
+                :min="1"
+                :max="10000"
+                style="width: 100%"
+              />
+              <p class="advanced-tip">
+                {{ $t('token_push_batch_hint') }}
+              </p>
+            </el-form-item>
           </el-collapse-item>
         </el-collapse>
       </div>
 
       <div class="btns">
-        <el-button type="primary" @click="submit">
-          {{ $t("download") }}
+        <el-button class="btn-select" @click="downloadSelectedRecords">
+          {{ $t('download_selected_records') }}
+        </el-button>
+        <el-button class="btn-download" type="primary" @click="downloadAllRecords">
+          {{ $t('download_all_records') }}
           <el-icon>
             <Download />
           </el-icon>
         </el-button>
       </div>
     </el-form>
+    <el-dialog
+      v-model="confirmSelectedDialogVis"
+      :title="$t('confirm_dialog_title')"
+      width="min(360px, 90vw)"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :append-to-body="true"
+      :show-close="true"
+      class="confirm-selected-dialog"
+    >
+      <template #header>
+        <div class="confirm-dialog__header">
+          <el-icon class="confirm-dialog__icon">
+            <WarningFilled />
+          </el-icon>
+          <div class="confirm-dialog__header-text">
+            <p class="confirm-dialog__title">{{ $t('confirm_dialog_title') }}</p>
+            <p class="confirm-dialog__subtitle">{{ $t('download_selected_records') }}</p>
+          </div>
+        </div>
+      </template>
+      <div class="confirm-dialog__content">
+        <p class="confirm-dialog__desc">
+          {{ $t('confirm_download_selected', { count: pendingSelectedIds.length }) }}
+        </p>
+        <div class="confirm-dialog__summary">
+          <span class="confirm-dialog__summary-label">{{ $t('download_selected_records') }}</span>
+          <span class="confirm-dialog__summary-value">{{ pendingSelectedIds.length }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer-actions">
+          <el-button @click="confirmSelectedDialogVis = false">{{ $t('no') }}</el-button>
+          <el-button type="primary" @click="confirmSelectedDownload">{{ $t('yes') }}</el-button>
+        </div>
+      </template>
+    </el-dialog>
     <el-dialog
       v-model="downModelVis"
       :title="$t('file_download')"
@@ -363,7 +418,7 @@
 import { ref, onMounted, reactive, toRefs, watch, computed } from 'vue'
 import { bitable, FieldType, base, PermissionEntity, OperationType } from '@lark-base-open/js-sdk'
 
-import { Download, InfoFilled, Tickets } from '@element-plus/icons-vue'
+import { Download, InfoFilled, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import DownModel from './DownModel.vue'
 import draggable from 'vuedraggable'
 
@@ -374,6 +429,8 @@ const $t = i18n.global.t
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
+const confirmSelectedDialogVis = ref(false)
+const pendingSelectedIds = ref([])
 const advancedPanels = ref([])
 const desktopChannels = ['websocket', 'websocket_auth']
 const formData = reactive({
@@ -390,7 +447,9 @@ const formData = reactive({
   secondFolderKey: '',
   wsHost: '127.0.0.1',
   wsPort: 11548,
-  appToken: ''
+  tokenPushBatchSize: 50,
+  appToken: '',
+  selectedRecordIds: []
 })
 const requiresDesktopClient = computed(() => desktopChannels.includes(formData.downloadChannel))
 const rules = reactive({
@@ -493,6 +552,27 @@ const rules = reactive({
       trigger: 'change'
     }
   ],
+  tokenPushBatchSize: [
+    {
+      validator: (rule, value, callback) => {
+        if (formData.downloadChannel !== 'websocket_auth') {
+          callback()
+          return
+        }
+        if (value === undefined || value === null || value === '') {
+          callback(new Error($t('error_token_push_batch_required')))
+          return
+        }
+        const num = Number(value)
+        if (!Number.isInteger(num) || num < 1 || num > 10000) {
+          callback(new Error($t('error_token_push_batch_range')))
+          return
+        }
+        callback()
+      },
+      trigger: 'change'
+    }
+  ],
   concurrentDownloads: [
     {
       required: true,
@@ -567,6 +647,7 @@ const attachmentList = computed(() => {
 watch(
   () => formData.viewId,
   async(viewId) => {
+    formData.selectedRecordIds = []
     if (viewId && activeTableInfo.value) {
       const table = await bitable.base.getTableById(formData.tableId)
 
@@ -602,6 +683,7 @@ watch(
     formData.attachmentFileds = attachmentList.value.map((e) => e.id)
     formData.firstFolderKey = ''
     formData.secondFolderKey = ''
+    formData.selectedRecordIds = []
   }
 )
 watch(
@@ -619,6 +701,62 @@ watch(
     }
   }
 )
+watch(
+  () => formData.downloadChannel,
+  (channel) => {
+    if (channel !== 'websocket_auth' && elform.value) {
+      elform.value.clearValidate('tokenPushBatchSize')
+    }
+  }
+)
+watch(
+  () => confirmSelectedDialogVis.value,
+  (visible) => {
+    if (!visible) {
+      pendingSelectedIds.value = []
+    }
+  }
+)
+const getSelectedRecordIdList = async() => {
+  try {
+    const selection = await bitable.base.getSelection()
+    const tableId = formData.tableId || selection?.tableId
+    const viewId = formData.viewId || selection?.viewId
+    if (!tableId || !viewId) return []
+    const table = await bitable.base.getTableById(tableId)
+    if (!table) return []
+    const view = await table.getViewById(viewId)
+    if (view && typeof view.getSelectedRecordIdList === 'function') {
+      const list = await view.getSelectedRecordIdList()
+      return Array.isArray(list) ? list : []
+    }
+  } catch (error) {
+    console.error('getSelectedRecordIdList failed', error)
+  }
+  return []
+}
+const downloadSelectedRecords = async() => {
+  const ids = await getSelectedRecordIdList()
+  if (!ids.length) {
+    await bitable.ui.showToast({
+      toastType: 'warning',
+      message: $t('no_selected_records')
+    })
+    return
+  }
+  pendingSelectedIds.value = ids
+  confirmSelectedDialogVis.value = true
+}
+const downloadAllRecords = async() => {
+  formData.selectedRecordIds = []
+  await submit()
+}
+const confirmSelectedDownload = async() => {
+  formData.selectedRecordIds = [...pendingSelectedIds.value]
+  confirmSelectedDialogVis.value = false
+  pendingSelectedIds.value = []
+  await submit()
+}
 const submit = async() => {
   // 获取下载权限（下载和打印归属一个权限）
   const bool = await base.getPermission({
@@ -656,6 +794,7 @@ onMounted(async() => {
   formData.viewId = selection?.viewId || ''
   formData.appToken = selection?.baseId || ''
   formData.attachmentFileds = attachmentList.value.map((e) => e.id)
+  formData.selectedRecordIds = []
 
   loading.value = false
 })
@@ -666,12 +805,100 @@ onMounted(async() => {
 
   .btns {
     display: flex;
-    justify-content: center;
+    justify-content: flex-end;
     align-items: center;
+    gap: 12px;
+    width: 100%;
+    margin-top: 16px;
 
-    .el-button {
-      width: 80%;
+    .btn-select,
+    .btn-download {
+      min-width: 160px;
     }
+  }
+}
+
+.confirm-selected-dialog {
+  .el-dialog__header {
+    display: flex;
+    align-items: center;
+    padding: 16px 20px 8px;
+  }
+
+  .el-dialog__body {
+    height: auto;
+    padding: 0 20px 20px;
+  }
+
+  .confirm-dialog__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .confirm-dialog__icon {
+    font-size: 20px;
+    color: var(--el-color-warning);
+    flex-shrink: 0;
+  }
+
+  .confirm-dialog__header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .confirm-dialog__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--N900);
+    margin: 0;
+  }
+
+  .confirm-dialog__subtitle {
+    font-size: 13px;
+    color: var(--N500);
+    margin: 0;
+  }
+
+  .confirm-dialog__content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .confirm-dialog__desc {
+    font-size: 14px;
+    color: var(--N700);
+    margin: 0;
+  }
+
+  .confirm-dialog__summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: 1px solid var(--el-color-warning-light-7);
+    background-color: var(--el-color-warning-light-9);
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+
+  .confirm-dialog__summary-label {
+    font-size: 13px;
+    color: var(--N500);
+  }
+
+  .confirm-dialog__summary-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--el-color-warning);
+  }
+
+  .dialog-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    width: 100%;
   }
 }
 

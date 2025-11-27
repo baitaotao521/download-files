@@ -24,10 +24,17 @@
   "websocket_port_placeholder": "Введите порт, например 11548",
   "advanced_settings_title": "Расширенные настройки",
   "advanced_settings_desc": "Раскройте, чтобы настроить хост и порт локального WebSocket-клиента.",
+  "token_push_batch_label": "Размер одной отправки",
+  "token_push_batch_hint": "Количество записей, отправляемых клиенту за один раз (1–10000).",
   "download_method": "Способ загрузки",
   "first_directory": "Каталог первого уровня",
   "second_directory": "Каталог второго уровня",
   "download": "Скачать",
+  "download_selected_records": "Скачать выбранные записи",
+  "download_all_records": "Скачать все записи",
+  "no_selected_records": "Выберите хотя бы одну запись в таблице",
+  "confirm_download_selected": "Скачать выбранные записи ({ count })?",
+  "confirm_dialog_title": "Подтверждение загрузки",
   "file_download": "Загрузка файлов",
   "download_progress": "Прогресс загрузки",
   "download_details": "Детали загрузки",
@@ -94,8 +101,11 @@
   "error_websocket_host_required": "Введите хост WebSocket",
   "error_websocket_port_required": "Введите порт WebSocket",
   "error_websocket_port_range": "Порт должен быть от 1 до 65535",
+  "error_token_push_batch_required": "Укажите размер одной отправки",
+  "error_token_push_batch_range": "Размер одной отправки должен быть от 1 до 10 000",
   "websocket_connection_failed": "Соединение не установлено. Проверьте, запущен ли клиент.",
   "websocket_zip_stage_message": "Сервис Python создал ZIP-архив по пути { path }",
-  "websocket_job_stage_message": "Сервис Python завершил задачу загрузки."
+  "websocket_job_stage_message": "Сервис Python завершил задачу загрузки.",
+  "token_push_waiting_message": "Отправка завершена. Можно закрыть плагин и дождаться завершения загрузки на клиенте."
 
 }

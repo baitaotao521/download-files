@@ -20,13 +20,24 @@ env:
     --noconfirm
     --collect-all python_app
     --collect-data python_app.locales
+    --icon public/app.ico
     --name
+  PYINSTALLER_DATA_POSIX: >-
+    --add-data=python_app/locales:python_app/locales
+    --add-data=python_app/_version.txt:python_app
+    --add-data=public:public
+  PYINSTALLER_DATA_WINDOWS: >-
+    --add-data=python_app/locales;python_app/locales
+    --add-data=python_app/_version.txt;python_app
+    --add-data=public;public
 
 jobs:
   linux:
     name: Linux ${{ matrix.arch_tag }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      APP_VERSION: ${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,8 +59,6 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH_TAG: ${{ matrix.arch_tag }}
-          # Linux 使用冒号分隔
-          ADD_DATA_ARG: "--add-data=python_app/locales:python_app/locales"
         run: |
           # 创建构建脚本
           cat <<'EOF' > docker_build.sh
@@ -63,7 +72,7 @@ jobs:
           echo "::group::Install Dependencies"
           python -m pip install --upgrade pip --user --no-warn-script-location
           python -m pip install --user -r scripts/requirements.txt --no-warn-script-location
-          python -m pip install --user pyinstaller --no-warn-script-location
+          python -m pip install --user pyinstaller pillow --no-warn-script-location
           echo "::endgroup::"
 
           echo "::group::Setup UPX"
@@ -86,8 +95,13 @@ jobs:
 
           echo "::group::Run PyInstaller"
           # 使用外部传入的环境变量构建
-          pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli ${ADD_DATA_ARG} --upx-dir "${UPX_DIR}"
-          pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop ${ADD_DATA_ARG} --upx-dir "${UPX_DIR}" --windowed
+          python python_app/build_version.py
+          pyinstaller ${CLI_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-cli \
+            ${PYINSTALLER_DATA_POSIX} \
+            --upx-dir "${UPX_DIR}"
+          pyinstaller ${DESKTOP_ENTRY} ${PYINSTALLER_BASE_ARGS} feishu-downloader-desktop \
+            ${PYINSTALLER_DATA_POSIX} \
+            --upx-dir "${UPX_DIR}" --windowed
           echo "::endgroup::"
 
           # 移动产物
@@ -110,7 +124,8 @@ jobs:
             -e CLI_ENTRY \
             -e DESKTOP_ENTRY \
             -e PYINSTALLER_BASE_ARGS="${PYINSTALLER_BASE_ARGS}" \
-            -e ADD_DATA_ARG="${ADD_DATA_ARG}" \
+            -e PYINSTALLER_DATA_POSIX="${PYINSTALLER_DATA_POSIX}" \
+            -e APP_VERSION \
             python:3.12 bash /workspace/docker_build.sh
 
       - name: Upload artifact
@@ -124,6 +139,8 @@ jobs:
     name: Windows ${{ matrix.arch_tag }}
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      APP_VERSION: ${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -148,7 +165,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt pyinstaller
+          pip install -r scripts/requirements.txt pyinstaller pillow
 
       - name: Install Build Tools
         run: choco install upx innosetup -y --no-progress
@@ -162,15 +179,13 @@ jobs:
 
       - name: Build Binaries (Portable)
         shell: pwsh
-        env:
-          # 修复点：移除了 --add-data 值中的双引号
-          ADD_DATA_ARG: '--add-data=python_app/locales;python_app/locales'
         run: |
+          python python_app/build_version.py
           # 1. 构建 CLI
-          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR"
+          pyinstaller $env:CLI_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-cli ($env:PYINSTALLER_DATA_WINDOWS -split ' ') --upx-dir "$env:UPX_DIR"
           
           # 2. 构建 Desktop (GUI)
-          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop $env:ADD_DATA_ARG --upx-dir "$env:UPX_DIR" --windowed
+          pyinstaller $env:DESKTOP_ENTRY ($env:PYINSTALLER_BASE_ARGS -split ' ') feishu-downloader-desktop ($env:PYINSTALLER_DATA_WINDOWS -split ' ') --upx-dir "$env:UPX_DIR" --windowed
 
       - name: Create Installer (Inno Setup)
         shell: pwsh
@@ -222,6 +237,8 @@ jobs:
   macos:
     name: macOS ${{ matrix.arch_tag }}
     runs-on: ${{ matrix.runner }}
+    env:
+      APP_VERSION: ${{ github.ref_name }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -244,19 +261,22 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r scripts/requirements.txt pyinstaller
+          pip install -r scripts/requirements.txt pyinstaller pillow
 
       - name: Install UPX
         run: brew install upx
 
       - name: Build Binaries
         # macOS 使用冒号 : 分隔
-        env:
-          ADD_DATA_ARG: '--add-data=python_app/locales:python_app/locales'
         run: |
+          python python_app/build_version.py
           UPX_DIR=$(dirname $(command -v upx))
-          pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli $ADD_DATA_ARG --upx-dir "${UPX_DIR}"
-          pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop $ADD_DATA_ARG --upx-dir "${UPX_DIR}" --windowed
+          pyinstaller $CLI_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-cli \
+            $PYINSTALLER_DATA_POSIX \
+            --upx-dir "${UPX_DIR}"
+          pyinstaller $DESKTOP_ENTRY $PYINSTALLER_BASE_ARGS feishu-downloader-desktop \
+            $PYINSTALLER_DATA_POSIX \
+            --upx-dir "${UPX_DIR}" --windowed
 
       - name: Prepare artifacts
         run: |

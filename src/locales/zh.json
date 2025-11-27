@@ -24,10 +24,17 @@
   "websocket_port_placeholder": "请输入服务端口，例如 11548",
   "advanced_settings_title": "高级设置",
   "advanced_settings_desc": "如需自定义本地客户端 WebSocket 地址，请展开此处设置主机和端口。",
+  "token_push_batch_label": "单次推送条数",
+  "token_push_batch_hint": "授权码模式每次向客户端下载的最大条数（1-10000）",
   "download_method": "下载方式",
   "first_directory": "一级目录",
   "second_directory": "二级目录",
   "download": "下载",
+  "download_selected_records": "下载所选记录",
+  "download_all_records": "下载全部记录",
+  "no_selected_records": "请在多维表格中选中至少一条记录",
+  "confirm_download_selected": "确认下载当前所选的 { count } 条记录？",
+  "confirm_dialog_title": "确认下载",
   "file_download": "文件下载",
   "download_progress": "下载总进度",
   "download_details": "下载详情",
@@ -94,8 +101,11 @@
   "error_websocket_host_required":"请输入 WebSocket 主机地址",
   "error_websocket_port_required":"请输入 WebSocket 端口",
   "error_websocket_port_range":"端口需在 1-65535 之间",
+  "error_token_push_batch_required":"请输入单次推送条数",
+  "error_token_push_batch_range":"单次推送条数需介于 1 与 10000 之间",
   "websocket_connection_failed":"连接失败，请确认客户端是否正常启动",
   "websocket_zip_stage_message":"Python 服务已生成压缩包：{ path }",
-  "websocket_job_stage_message":"Python 服务已完成下载任务"
+  "websocket_job_stage_message":"Python 服务已完成下载任务",
+  "token_push_waiting_message":"推送完成，可关闭当前插件，请等待客户端下载成功"
 
 }

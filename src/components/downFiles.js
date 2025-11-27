@@ -18,7 +18,8 @@ const $t = i18n.global.t
 const MAX_ZIP_SIZE_NUM = 1
 
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
-
+// 下载工作线程并发数
+const DOWNLOAD_WORKER_CONCURRENCY = 10
 const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
@@ -26,7 +27,7 @@ const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
 class TokenDispatcher {
   /**
-   * 控制鉴权码推送速率，默认 1 秒最多 50 次。
+   * 控制鉴权码推送速率，可配置 1 秒内推送的条数。
    */
   constructor(limit = 50, windowMs = 1000) {
     this.limit = limit
@@ -38,7 +39,8 @@ class TokenDispatcher {
    * 获取一个可发送鉴权码的时间窗口，必要时等待。
    */
   async acquire(shouldAbort) {
-    while (true) {
+    let acquired = false
+    while (!acquired) {
       if (typeof shouldAbort === 'function' && shouldAbort()) {
         return
       }
@@ -46,10 +48,11 @@ class TokenDispatcher {
       this.timeline = this.timeline.filter((timestamp) => now - timestamp < this.windowMs)
       if (this.timeline.length < this.limit) {
         this.timeline.push(now)
-        return
+        acquired = true
+      } else {
+        const waitTime = this.windowMs - (now - this.timeline[0])
+        await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
       }
-      const waitTime = this.windowMs - (now - this.timeline[0])
-      await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
     }
   }
 }
@@ -68,7 +71,8 @@ class FileDownloader {
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
-    this.tokenDispatcher = new TokenDispatcher()
+    const pushLimit = Number(this.tokenPushBatchSize) || 50
+    this.tokenDispatcher = new TokenDispatcher(pushLimit)
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
@@ -83,9 +87,27 @@ class FileDownloader {
     return this.downloadChannel === 'websocket_auth'
   }
   /**
-   * 分页拉取记录列表，返回聚合后的记录数据。
+   * 根据记录选择情况聚合记录：优先使用手动选择，否则分页获取视图全部记录。
    */
   async loopGetRecordIdList(list = [], pageToken) {
+    const hasExplicitSelection = Array.isArray(this.selectedRecordIds) && this.selectedRecordIds.length
+    if (hasExplicitSelection) {
+      const uniqueIds = Array.from(new Set(this.selectedRecordIds))
+      for (const recordId of uniqueIds) {
+        const [error, record] = await to(this.oTable.getRecordById(recordId))
+        if (error) {
+          console.log(error)
+          continue
+        }
+        if (record) {
+          list.push({
+            recordId,
+            fields: record.fields || {}
+          })
+        }
+      }
+      return list
+    }
     const params = {
       pageSize: 200,
       viewId: this.viewId
@@ -243,6 +265,29 @@ class FileDownloader {
     return name
   }
   /**
+   * 以有限并发运行任务，避免一次性占满资源。
+   */
+  async runWithConcurrency(list, worker, concurrency = DOWNLOAD_WORKER_CONCURRENCY) {
+    const source = Array.isArray(list) ? list : []
+    if (!source.length) return
+    const limit = Math.max(1, Math.min(concurrency, source.length))
+    let cursor = 0
+    const pick = () => {
+      if (cursor >= source.length) return null
+      const current = source[cursor]
+      cursor += 1
+      return current
+    }
+    const runners = Array.from({ length: limit }, async() => {
+      let item = pick()
+      while (item) {
+        await worker(item)
+        item = pick()
+      }
+    })
+    await Promise.all(runners)
+  }
+  /**
    * 按 ZIP 包体积切片并串行写入压缩包。
    */
   async zipDownLoad() {
@@ -256,9 +301,10 @@ class FileDownloader {
 
     for (const zipList of zipsList) {
       this.zip = new JSZip()
-      for (const fileInfo of zipList) {
-        await this.processFile(fileInfo)
-      }
+      await this.runWithConcurrency(
+        zipList,
+        (fileInfo) => this.processFile(fileInfo)
+      )
       const [err, content] = await to(this.zip.generateAsync(
         { type: 'blob' },
         (metadata) => {
@@ -281,6 +327,9 @@ class FileDownloader {
    * 获取附件直链并应用唯一文件名。
    */
   async getAttachmentUrl(fileInfo) {
+    if (fileInfo.fileUrl) {
+      return fileInfo.fileUrl
+    }
     const { token, fieldId, recordId, path, name } = fileInfo
 
     fileInfo.name = this.getUniqueFileName(name, path)
@@ -289,6 +338,7 @@ class FileDownloader {
       fieldId,
       recordId
     )
+    return fileInfo.fileUrl
   }
   /**
    * 处理单个文件，获取内容并写入当前 Zip。
@@ -318,12 +368,13 @@ class FileDownloader {
         URL.revokeObjectURL(objectUrl)
       }
     }
-    for (let index = 0; index < cellList.length; index++) {
-      const fileInfo = cellList[index]
-
-      await this.getAttachmentUrl(fileInfo)
-      await downLocal(fileInfo)
-    }
+    await this.runWithConcurrency(
+      cellList,
+      async(fileInfo) => {
+        await this.getAttachmentUrl(fileInfo)
+        await downLocal(fileInfo)
+      }
+    )
   }
   /**
    * 通过浏览器串行下载：根据选择切换 zip 或逐个下载。
@@ -377,9 +428,9 @@ class FileDownloader {
           downloadMode: useTokenMode ? 'token' : 'url',
           ...(useTokenMode
             ? {
-                tableId: this.tableId,
-                appToken: this.appToken
-              }
+              tableId: this.tableId,
+              appToken: this.appToken
+            }
             : {})
         }
       })
@@ -387,7 +438,7 @@ class FileDownloader {
         if (abortDownloads) break
         const { order } = fileInfo
         try {
-          if (!useTokenMode) {
+          if (!useTokenMode && !fileInfo.fileUrl) {
             await this.getAttachmentUrl(fileInfo)
           }
           if (abortDownloads) break
@@ -424,6 +475,11 @@ class FileDownloader {
           })
           stopAllDownloads(error)
         }
+      }
+      if (!abortDownloads && useTokenMode) {
+        this.emit('zip_progress', {
+          message: $t('token_push_waiting_message')
+        })
       }
       if (!abortDownloads) {
         this._sendWebSocketMessage(socket, {

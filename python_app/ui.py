@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import queue
@@ -12,6 +13,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
+
+try:
+  from cairosvg import svg2png
+except ImportError:  # pragma: no cover - optional dependency
+  svg2png = None
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -29,6 +35,8 @@ from .user_config import (
   load_user_config,
   save_user_config
 )
+from .paths import get_public_asset
+from .version import APP_VERSION
 
 load_dotenv(find_dotenv(), override=False)
 
@@ -62,6 +70,9 @@ class DownloaderDesktopApp:
     self.localizer = Localizer(DEFAULT_LANGUAGE)
     self.user_preferences: UserPreferences = load_user_config()
     self.root = tk.Tk()
+    self.app_version = APP_VERSION
+    self._icon_image: Optional[tk.PhotoImage] = None
+    self._apply_window_icon()
     self.root.minsize(640, 420)
     self.server: Optional[WebSocketDownloadServer] = None
     self.monitor = DownloadMonitor()
@@ -220,6 +231,17 @@ class DownloaderDesktopApp:
     self.log_text.pack(fill=tk.BOTH, expand=True)
     self._update_advanced_visibility()
     self._update_log_visibility()
+
+  def _apply_window_icon(self) -> None:
+    """加载并应用窗口图标，仅使用 public/app.ico。"""
+    icon_file = get_public_asset('app.ico')
+    if not icon_file.exists():
+      logging.warning('icon file not found: %s', icon_file)
+      return
+    try:
+      self.root.iconbitmap(default=str(icon_file))
+    except tk.TclError as exc:
+      logging.warning('failed to apply ICO icon: %s', exc)
 
   def _choose_output_dir(self) -> None:
     """弹出目录选择器并更新输出路径。"""
@@ -544,7 +566,7 @@ class DownloaderDesktopApp:
 
   def _apply_translations(self) -> None:
     """刷新界面上的多语言文本。"""
-    self.root.title(self._t('title'))
+    self._update_window_title()
     self.language_label_widget.config(text=self._t('language_label') + ':')
     self.form_frame.config(text=self._t('server_config'))
     self.stats_frame.config(text=self._t('stats_title'))
@@ -571,6 +593,14 @@ class DownloaderDesktopApp:
     self._update_log_visibility()
     self._refresh_stats()
     self._refresh_status_text()
+
+  def _update_window_title(self) -> None:
+    """根据版本号更新程序标题。"""
+    base_title = self._t('title')
+    version = (self.app_version or '').strip()
+    if version:
+      base_title = f'{base_title} {version}'
+    self.root.title(base_title)
 
   def _refresh_status_text(self) -> None:
     """根据当前状态刷新状态栏文本。"""

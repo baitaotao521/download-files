@@ -24,10 +24,17 @@
   "websocket_port_placeholder": "Introduce el puerto, ej. 11548",
   "advanced_settings_title": "Configuración avanzada",
   "advanced_settings_desc": "Amplía para personalizar el host y puerto del cliente WebSocket local.",
+  "token_push_batch_label": "Cantidad por envío",
+  "token_push_batch_hint": "Número de registros enviados al cliente por lote (1-10 000).",
   "download_method": "Método de descarga",
   "first_directory": "Directorio de primer nivel",
   "second_directory": "Directorio de segundo nivel",
   "download": "Descargar",
+  "download_selected_records": "Descargar registros seleccionados",
+  "download_all_records": "Descargar todos los registros",
+  "no_selected_records": "Selecciona al menos un registro en la tabla",
+  "confirm_download_selected": "¿Descargar las { count } registros seleccionadas?",
+  "confirm_dialog_title": "Confirmar descarga",
   "file_download": "Descarga de archivos",
   "download_progress": "Progreso de descarga",
   "download_details": "Detalles de la descarga",
@@ -94,8 +101,11 @@
   "error_websocket_host_required": "Ingresa el host de WebSocket",
   "error_websocket_port_required": "Ingresa el puerto de WebSocket",
   "error_websocket_port_range": "El puerto debe estar entre 1 y 65535",
+  "error_token_push_batch_required": "Introduce la cantidad por envío",
+  "error_token_push_batch_range": "La cantidad por envío debe estar entre 1 y 10 000",
   "websocket_connection_failed": "Conexión fallida. Asegúrate de que el cliente esté ejecutándose.",
   "websocket_zip_stage_message": "El servicio de Python creó un archivo ZIP en { path }",
-  "websocket_job_stage_message": "El servicio de Python terminó la tarea de descarga."
+  "websocket_job_stage_message": "El servicio de Python terminó la tarea de descarga.",
+  "token_push_waiting_message": "Envío completado. Puedes cerrar el complemento y esperar a que el cliente termine la descarga."
 
 }
