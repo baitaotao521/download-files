@@ -1,6 +1,8 @@
 {
   "name": "donwload-files",
   "version": "1.0.0",
+
+  "output": "dist",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
