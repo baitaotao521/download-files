@@ -66,3 +66,24 @@ export const chunkArrayByMaxSize = (items, maxSize) => {
     maxChunks
   }
 }
+
+/**
+ * 比较语义化版本号，返回 -1/0/1（仅比较前三段数字）。
+ */
+export const compareSemanticVersions = (left, right) => {
+  const parse = (value) => {
+    const parts = String(value || '')
+      .trim()
+      .replace(/^v/i, '')
+      .split('.')
+      .map((item) => Number.parseInt(item, 10))
+    return [parts[0] || 0, parts[1] || 0, parts[2] || 0]
+  }
+  const a = parse(left)
+  const b = parse(right)
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] > b[i]) return 1
+    if (a[i] < b[i]) return -1
+  }
+  return 0
+}

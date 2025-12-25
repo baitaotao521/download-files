@@ -2,8 +2,7 @@ import { bitable } from '@lark-base-open/js-sdk'
 import { saveAs } from 'file-saver'
 import JSZip from 'jszip'
 import axios from 'axios'
-import { chunkArrayByMaxSize } from '@/utils/index.js'
-import { ElMessageBox } from 'element-plus'
+import { chunkArrayByMaxSize, compareSemanticVersions } from '@/utils/index.js'
 
 import { i18n } from '@/locales/i18n.js'
 import to from 'await-to-js'
@@ -30,27 +29,6 @@ const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 const MIN_DESKTOP_CLIENT_VERSION = '1.1.5'
 const DESKTOP_CLIENT_UPDATE_URL =
   'https://xcnfciyevzhz.feishu.cn/wiki/J9bdwozIViVC4ZkOuKAcSbAQnKQ'
-
-/**
- * 比较语义化版本号，返回 -1/0/1（仅比较前三段数字）。
- */
-const compareSemanticVersions = (left, right) => {
-  const parse = (value) => {
-    const parts = String(value || '')
-      .trim()
-      .replace(/^v/i, '')
-      .split('.')
-      .map((item) => Number.parseInt(item, 10))
-    return [parts[0] || 0, parts[1] || 0, parts[2] || 0]
-  }
-  const a = parse(left)
-  const b = parse(right)
-  for (let i = 0; i < 3; i += 1) {
-    if (a[i] > b[i]) return 1
-    if (a[i] < b[i]) return -1
-  }
-  return 0
-}
 
 class TokenDispatcher {
   /**
@@ -566,23 +544,7 @@ class FileDownloader {
           required: MIN_DESKTOP_CLIENT_VERSION,
           url: DESKTOP_CLIENT_UPDATE_URL
         })
-        stopAllDownloads(message)
-        try {
-          await ElMessageBox.confirm(
-            message,
-            $t('desktop_client_update_title'),
-            {
-              type: 'warning',
-              confirmButtonText: $t('desktop_client_update_open'),
-              cancelButtonText: $t('desktop_client_update_cancel'),
-              closeOnClickModal: false,
-              closeOnPressEscape: false
-            }
-          )
-          window.open(DESKTOP_CLIENT_UPDATE_URL, '_blank')
-        } catch (error) {
-          // 用户取消或弹窗失败时，保持终止下载即可。
-        }
+        throw new Error(message)
       }
       let sentCount = 0
       for (const fileInfo of this.cellList) {

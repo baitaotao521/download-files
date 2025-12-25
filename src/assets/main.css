@@ -4,4 +4,20 @@
   --N500: #8F959E;
 }
 
+/* 强制居中 MessageBox（部分容器环境下 ::after 垂直居中可能失效） */
+.el-overlay-message-box {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 16px;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
+.el-overlay-message-box::after {
+  display: none;
+}

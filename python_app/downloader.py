@@ -30,6 +30,7 @@ WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
 WEBSOCKET_REFRESH_TYPE = 'feishu_attachment_refresh'
+WEBSOCKET_PROBE_TYPE = 'feishu_attachment_probe'
 ACK_MESSAGE_TYPE = 'feishu_attachment_ack'
 
 # 仅限制“向前端请求临时链接”的并发数，避免一次性触发大量 refresh 导致排队超时。
@@ -531,6 +532,16 @@ class AttachmentDownloader:
     msg_type = payload.get('type')
     data = payload.get('data') or {}
 
+    if msg_type == WEBSOCKET_PROBE_TYPE:
+      await self._send_ack(
+        websocket,
+        status='success',
+        message='server info',
+        order=None,
+        extra={'stage': 'server_info', 'version': APP_VERSION}
+      )
+      return
+
     if msg_type == WEBSOCKET_CONFIG_TYPE:
       await job_state.configure(data, websocket)
       return
@@ -879,6 +890,7 @@ __all__ = [
   'WEBSOCKET_COMPLETE_TYPE',
   'WEBSOCKET_CONFIG_TYPE',
   'WEBSOCKET_LINK_TYPE',
+  'WEBSOCKET_PROBE_TYPE',
   'WEBSOCKET_REFRESH_TYPE',
   'AttachmentDownloader',
   'DownloadJobState'

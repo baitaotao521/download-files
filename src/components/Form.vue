@@ -442,15 +442,23 @@ import { ref, onMounted, reactive, toRefs, watch, computed } from 'vue'
 import { bitable, FieldType, base, PermissionEntity, OperationType } from '@lark-base-open/js-sdk'
 
 import { Download, InfoFilled, Tickets, WarningFilled } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import DownModel from './DownModel.vue'
 import draggable from 'vuedraggable'
 
 import { SUPPORT_TYPES, getInfoByTableMetaList, sortByOrder } from '@/hooks/useBitable.js'
 import { i18n } from '@/locales/i18n.js'
+import { compareSemanticVersions } from '@/utils/index.js'
 
 const $t = i18n.global.t
 const desktopUsageGuideUrl =
   'https://p6bgwki4n6.feishu.cn/docx/Pn7Kdw2rPocwPZxVfF5cMsAcnle#share-P1DidKxwIoVRO9xruLecXk4snLV'
+const MIN_DESKTOP_CLIENT_VERSION = '1.1.4'
+const DESKTOP_CLIENT_UPDATE_URL =
+  'https://xcnfciyevzhz.feishu.cn/wiki/J9bdwozIViVC4ZkOuKAcSbAQnKQ'
+const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
+const WEBSOCKET_PROBE_TYPE = 'feishu_attachment_probe'
+const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
@@ -761,6 +769,179 @@ watch(
     }
   }
 )
+
+/**
+ * 组合用户输入的 WebSocket URL（兼容 ws://127.0.0.1:11548 与直接输入完整 URL）。
+ */
+const buildWebSocketUrl = (rawHost, rawPort) => {
+  const host = String(rawHost || '').trim()
+  if (!host) {
+    return ''
+  }
+  if (/^wss?:\/\//i.test(host)) {
+    return host
+  }
+  const port = rawPort === undefined || rawPort === null ? '' : String(rawPort).trim()
+  if (host.includes(':') || !port) {
+    return `ws://${host}`
+  }
+  return `ws://${host}:${port}`
+}
+
+/**
+ * 连接本地客户端并获取服务端版本号（优先 probe，失败后回退 config）。
+ */
+const requestDesktopClientVersion = async() => {
+  const wsUrl = buildWebSocketUrl(formData.wsHost, formData.wsPort)
+  if (!wsUrl) {
+    throw new Error($t('websocket_connection_failed'))
+  }
+
+  const timeoutMs = 3000
+  const fallbackDelayMs = 800
+
+  return await new Promise((resolve, reject) => {
+    const socket = new WebSocket(wsUrl)
+    let settled = false
+    let fallbackTimer = null
+    const timeoutTimer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        try {
+          socket.close()
+        } catch (error) {
+          // ignore
+        }
+        reject(new Error($t('websocket_connection_failed')))
+      }
+    }, timeoutMs)
+
+    const cleanup = () => {
+      clearTimeout(timeoutTimer)
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer)
+        fallbackTimer = null
+      }
+      socket.onopen = null
+      socket.onerror = null
+      socket.onmessage = null
+      socket.onclose = null
+      try {
+        socket.close()
+      } catch (error) {
+        // ignore
+      }
+    }
+
+    const finish = (err, version) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (err) {
+        reject(err)
+        return
+      }
+      resolve(version || '')
+    }
+
+    const sendPayload = (payload) => {
+      try {
+        socket.send(JSON.stringify(payload))
+      } catch (error) {
+        // ignore
+      }
+    }
+
+    socket.onopen = () => {
+      // 新版本客户端支持 probe，不会创建下载目录。
+      sendPayload({ type: WEBSOCKET_PROBE_TYPE })
+      // 兼容老版本：若 probe 无响应，则回退发送 config 触发 server_info。
+      fallbackTimer = setTimeout(() => {
+        sendPayload({
+          type: WEBSOCKET_CONFIG_TYPE,
+          data: {
+            concurrent: 1,
+            zipAfterDownload: false,
+            jobId: `probe_${Date.now()}`,
+            jobName: 'probe',
+            zipName: 'probe',
+            total: 0,
+            downloadMode: 'url'
+          }
+        })
+      }, fallbackDelayMs)
+    }
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event?.data || '{}')
+        if (!payload || payload.type !== WEBSOCKET_ACK_TYPE) {
+          return
+        }
+        const data = payload.data || {}
+        if (data.stage !== 'server_info') {
+          return
+        }
+        const version = String(data.version || '').trim()
+        finish(null, version)
+      } catch (error) {
+        // ignore
+      }
+    }
+
+    socket.onerror = () => {
+      finish(new Error($t('websocket_connection_failed')))
+    }
+
+    socket.onclose = () => {
+      finish(new Error($t('websocket_connection_failed')))
+    }
+  })
+}
+
+/**
+ * 检查本地客户端下载器版本；低于要求则弹窗提示并阻止继续下载。
+ */
+const ensureDesktopClientVersion = async() => {
+  let serverVersion = ''
+  try {
+    serverVersion = await requestDesktopClientVersion()
+  } catch (error) {
+    await bitable.ui.showToast({
+      toastType: 'warning',
+      message: $t('websocket_connection_failed')
+    })
+    return false
+  }
+
+  if (!serverVersion || compareSemanticVersions(serverVersion, MIN_DESKTOP_CLIENT_VERSION) < 0) {
+    const displayedVersion = serverVersion || 'unknown'
+    const message = $t('desktop_client_update_required', {
+      current: displayedVersion,
+      required: MIN_DESKTOP_CLIENT_VERSION,
+      url: DESKTOP_CLIENT_UPDATE_URL
+    })
+    await ElMessageBox.alert(message, $t('desktop_client_update_title'), {
+      type: 'warning',
+      confirmButtonText: $t('desktop_client_update_open'),
+      showClose: false,
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+      center: true,
+      callback: () => {
+        try {
+          window.open(DESKTOP_CLIENT_UPDATE_URL, '_blank')
+        } catch (error) {
+          // ignore
+        }
+      }
+    })
+    return false
+  }
+
+  return true
+}
+
 const getSelectedRecordIdList = async() => {
   try {
     const selection = await bitable.base.getSelection()
@@ -816,12 +997,19 @@ const submit = async() => {
     return
   }
   if (!elform.value) return
-  await elform.value.validate(async(valid) => {
-    if (valid) {
-      datas.finshDownload = false
-      downModelVis.value = true
-    }
-  })
+  try {
+    await elform.value.validate()
+  } catch (error) {
+    return
+  }
+
+  if (requiresDesktopClient.value) {
+    const ok = await ensureDesktopClientVersion()
+    if (!ok) return
+  }
+
+  datas.finshDownload = false
+  downModelVis.value = true
 }
 
 onMounted(async() => {
