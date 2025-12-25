@@ -2,7 +2,7 @@ import { bitable } from '@lark-base-open/js-sdk'
 import { saveAs } from 'file-saver'
 import JSZip from 'jszip'
 import axios from 'axios'
-import { chunkArrayByMaxSize, compareSemanticVersions } from '@/utils/index.js'
+import { chunkArrayByMaxSize } from '@/utils/index.js'
 
 import { i18n } from '@/locales/i18n.js'
 import to from 'await-to-js'
@@ -25,10 +25,6 @@ const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
 const WEBSOCKET_REFRESH_TYPE = 'feishu_attachment_refresh'
 const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
-
-const MIN_DESKTOP_CLIENT_VERSION = '1.1.5'
-const DESKTOP_CLIENT_UPDATE_URL =
-  'https://xcnfciyevzhz.feishu.cn/wiki/J9bdwozIViVC4ZkOuKAcSbAQnKQ'
 
 class TokenDispatcher {
   /**
@@ -418,17 +414,6 @@ class FileDownloader {
     const wsUrl = this._buildWebSocketUrl()
     const socket = await this._createWebSocket(wsUrl)
     let abortDownloads = false
-    let resolveServerInfo = null
-    let rejectServerInfo = null
-    const serverInfoPromise = new Promise((resolve, reject) => {
-      resolveServerInfo = resolve
-      rejectServerInfo = reject
-    })
-    const serverInfoTimer = setTimeout(() => {
-      if (typeof resolveServerInfo === 'function') {
-        resolveServerInfo(null)
-      }
-    }, 3000)
     // 宏任务延迟：让出事件循环，确保能及时处理服务端 ACK/refresh。
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     // WebSocket 发送回压：避免 bufferedAmount 过大导致 refresh 消息排队过久。
@@ -445,18 +430,9 @@ class FileDownloader {
       if (message) {
         this.emit('warn', message)
       }
-      if (typeof rejectServerInfo === 'function') {
-        rejectServerInfo(new Error(message || $t('file_download_failed')))
-      }
     }
     const completion = this._bindWebSocketLifecycle(socket, {
       onFatalError: stopAllDownloads,
-      onServerInfo: (info) => {
-        clearTimeout(serverInfoTimer)
-        if (typeof resolveServerInfo === 'function') {
-          resolveServerInfo(info)
-        }
-      },
       onRefreshUrl: (() => {
         const fileInfoByOrder = new Map(
           (this.cellList || []).map((item) => [Number(item?.order), item])
@@ -535,17 +511,6 @@ class FileDownloader {
             : {})
         }
       })
-      const serverInfo = await serverInfoPromise
-      const serverVersion = String(serverInfo?.version || '').trim()
-      if (!serverVersion || compareSemanticVersions(serverVersion, MIN_DESKTOP_CLIENT_VERSION) < 0) {
-        const displayedVersion = serverVersion || 'unknown'
-        const message = $t('desktop_client_update_required', {
-          current: displayedVersion,
-          required: MIN_DESKTOP_CLIENT_VERSION,
-          url: DESKTOP_CLIENT_UPDATE_URL
-        })
-        throw new Error(message)
-      }
       let sentCount = 0
       for (const fileInfo of this.cellList) {
         if (abortDownloads) break
@@ -613,7 +578,6 @@ class FileDownloader {
         await completion.catch(() => {})
       }
     } finally {
-      clearTimeout(serverInfoTimer)
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close()
       }
