@@ -53,7 +53,7 @@ class DownloadJobState:
     self.sdk_client: Any = None
 
   def _coerce_concurrency(self, value: Any, *, fallback: int) -> int:
-    """解析并校验前端传入的并发数，确保落在 1-50 范围内。"""
+    """解析并校验前端传入的并发数，确保落在 1-50 范围内（主要用于授权码模式）。"""
     try:
       parsed = int(value)
     except (TypeError, ValueError):
@@ -85,7 +85,7 @@ class DownloadJobState:
       )
       return False
 
-    self.semaphore = asyncio.Semaphore(concurrent)
+    self.semaphore = None
     self.zip_after = zip_after
     self.job_id = job_id
     self.job_name = self.handler._sanitize_component(job_name) or f'download_{job_id}'
@@ -95,8 +95,11 @@ class DownloadJobState:
     await self._configure_download_mode(data, websocket)
     if not self.configured:
       return False
+    if self.download_mode == 'token':
+      self.semaphore = asyncio.Semaphore(concurrent)
     self.handler._monitor_job_started(self.total)
-    logging.info('job configured: job_id=%s concurrent=%s zip=%s', self.job_id, concurrent, zip_after)
+    concurrent_label = concurrent if self.semaphore else 'unlimited'
+    logging.info('job configured: job_id=%s concurrent=%s zip=%s', self.job_id, concurrent_label, zip_after)
     return True
 
   async def _configure_download_mode(self, data: Dict[str, Any], websocket) -> None:
@@ -323,6 +326,10 @@ class AttachmentDownloader:
       sock_read=self.config.normalized_download_read_timeout()
     )
 
+  def _build_http_connector(self) -> aiohttp.TCPConnector:
+    """构造不限制连接数的连接器，避免 aiohttp 默认连接上限影响普通模式并发下载。"""
+    return aiohttp.TCPConnector(limit=0, limit_per_host=0)
+
   def _format_download_exception(self, exc: BaseException) -> str:
     """将下载异常转换为可读文本，避免 TimeoutError 等异常返回空字符串。"""
     if isinstance(exc, aiohttp.ClientResponseError):
@@ -353,7 +360,10 @@ class AttachmentDownloader:
     peer = getattr(websocket, 'remote_address', ('unknown', ''))
     logging.info('client connected %s:%s', peer[0], peer[1])
     self._monitor_connection(True)
-    async with aiohttp.ClientSession(timeout=self._build_http_timeout()) as session:
+    async with aiohttp.ClientSession(
+      timeout=self._build_http_timeout(),
+      connector=self._build_http_connector()
+    ) as session:
       job_state = DownloadJobState(self, session)
       try:
         async for message in websocket:
