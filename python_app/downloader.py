@@ -52,6 +52,16 @@ class DownloadJobState:
     self.table_id: Optional[str] = None
     self.sdk_client: Any = None
 
+  def _coerce_concurrency(self, value: Any, *, fallback: int) -> int:
+    """解析并校验前端传入的并发数，确保落在 1-50 范围内。"""
+    try:
+      parsed = int(value)
+    except (TypeError, ValueError):
+      return fallback
+    if 1 <= parsed <= 50:
+      return parsed
+    return fallback
+
   async def configure(self, data: Dict[str, Any], websocket) -> bool:
     """应用前端传来的配置，若缺失则通知前端并阻止下载。"""
     if self.configured:
@@ -61,7 +71,7 @@ class DownloadJobState:
     self.table_id = None
     self.sdk_client = None
     try:
-      concurrent = self.handler.default_concurrency
+      concurrent = self._coerce_concurrency(data.get('concurrent'), fallback=self.handler.default_concurrency)
       zip_after = bool(data.get('zipAfterDownload'))
       job_id = str(data.get('jobId') or int(time.time()))
       job_name = data.get('zipName') or data.get('jobName') or f'download_{job_id}'
@@ -75,7 +85,7 @@ class DownloadJobState:
       )
       return False
 
-    self.semaphore = None
+    self.semaphore = asyncio.Semaphore(concurrent)
     self.zip_after = zip_after
     self.job_id = job_id
     self.job_name = self.handler._sanitize_component(job_name) or f'download_{job_id}'
@@ -253,7 +263,7 @@ class DownloadJobState:
         last_error = str(exc)
         break
       except Exception as exc:  # noqa: BLE001
-        last_error = str(exc)
+        last_error = self.handler._format_download_exception(exc)
         logging.exception('download failed for %s (attempt %s/3)', file_name, attempt)
         if attempt < 3:
           await asyncio.sleep(0.5)
@@ -305,6 +315,27 @@ class AttachmentDownloader:
     self._sdk_rate_lock = asyncio.Lock()
     self._sdk_request_times: Deque[float] = deque()
 
+  def _build_http_timeout(self) -> aiohttp.ClientTimeout:
+    """构造适合大文件下载的 aiohttp 超时策略，避免长耗时请求被默认超时取消。"""
+    return aiohttp.ClientTimeout(
+      total=None,
+      connect=self.config.normalized_http_connect_timeout(),
+      sock_read=self.config.normalized_download_read_timeout()
+    )
+
+  def _format_download_exception(self, exc: BaseException) -> str:
+    """将下载异常转换为可读文本，避免 TimeoutError 等异常返回空字符串。"""
+    if isinstance(exc, aiohttp.ClientResponseError):
+      message = (exc.message or '').strip()
+      return f'HTTP {exc.status}: {message}' if message else f'HTTP {exc.status}'
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+      read_timeout = self.config.normalized_download_read_timeout()
+      if read_timeout:
+        return f'下载超时：超过 {int(read_timeout)} 秒未收到数据，请检查网络或提高下载超时后重试。'
+      return '下载超时：长时间未收到数据，请检查网络后重试。'
+    message = str(exc).strip()
+    return message or exc.__class__.__name__
+
   def update_output_dir(self, new_dir: Path) -> Path:
     """更新基础保存目录，确保新路径立即生效。"""
     self.config.output_dir = Path(new_dir)
@@ -322,7 +353,7 @@ class AttachmentDownloader:
     peer = getattr(websocket, 'remote_address', ('unknown', ''))
     logging.info('client connected %s:%s', peer[0], peer[1])
     self._monitor_connection(True)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=self._build_http_timeout()) as session:
       job_state = DownloadJobState(self, session)
       try:
         async for message in websocket:
@@ -368,9 +399,16 @@ class AttachmentDownloader:
       raise ValueError('invalid path detected, aborting download.')
     return self._ensure_unique_name(tentative_path)
 
+  def _is_destination_occupied(self, destination: Path) -> bool:
+    """判断目标路径是否已被占用（包含临时 .part 文件），用于并发下载避免命名冲突。"""
+    if destination.exists():
+      return True
+    temp_destination = destination.with_name(f'{destination.name}.part')
+    return temp_destination.exists()
+
   def _ensure_unique_name(self, destination: Path) -> Path:
     """为已存在的文件追加编号后缀，避免覆盖。"""
-    if not destination.exists():
+    if not self._is_destination_occupied(destination):
       return destination
     stem = destination.stem
     suffix = destination.suffix
@@ -378,7 +416,7 @@ class AttachmentDownloader:
     counter = 1
     while True:
       candidate = parent / f'{stem}_{counter}{suffix}'
-      if not candidate.exists():
+      if not self._is_destination_occupied(candidate):
         return candidate
       counter += 1
     return destination
@@ -406,15 +444,30 @@ class AttachmentDownloader:
     *,
     file_key: str
   ) -> Path:
-    """使用 aiohttp 流式下载文件。"""
+    """使用 aiohttp 流式下载文件（先写入临时文件，成功后再原子替换）。"""
     destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_destination = destination.with_name(f'{destination.name}.part')
     logging.info('downloading %s -> %s', url, destination)
+    try:
+      if temp_destination.exists():
+        temp_destination.unlink()
+    except OSError:
+      logging.debug('failed to cleanup temp file before download: %s', temp_destination)
     async with session.get(url) as response:
       response.raise_for_status()
-      with destination.open('wb') as file_obj:
-        async for chunk in response.content.iter_chunked(128 * 1024):
-          file_obj.write(chunk)
-          self._monitor_file_progress(file_key, len(chunk))
+      try:
+        with temp_destination.open('wb') as file_obj:
+          async for chunk in response.content.iter_chunked(128 * 1024):
+            file_obj.write(chunk)
+            self._monitor_file_progress(file_key, len(chunk))
+        temp_destination.replace(destination)
+      except Exception:  # noqa: BLE001
+        try:
+          if temp_destination.exists():
+            temp_destination.unlink()
+        except OSError:
+          logging.debug('failed to cleanup temp file after error: %s', temp_destination)
+        raise
     logging.info('saved file to %s', destination)
     return destination
 

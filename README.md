@@ -31,6 +31,8 @@ python scripts/ws_downloader.py \
 - `--output`：文件保存目录，默认 `./downloads`。相对路径会以当前工作目录为基准。
 - `--log-level`：日志级别，可选 `DEBUG/INFO/WARNING/ERROR`，默认 `INFO`。
 - `--download-concurrency`：Python 端下载并发数，默认 `5`。不建议设置过大以免触发限流。
+- `--http-connect-timeout`：HTTP 连接超时秒数，默认 `30`。
+- `--download-read-timeout`：下载读取超时秒数（超过该时间未收到数据将超时），默认 `3600`；设置为 `0` 表示不限制。
 
 ### 桌面程序
 

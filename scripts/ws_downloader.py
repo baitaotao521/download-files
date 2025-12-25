@@ -50,6 +50,18 @@ def parse_args() -> argparse.Namespace:
     help='Python 端下载并发数 (默认: 5)'
   )
   parser.add_argument(
+    '--http-connect-timeout',
+    type=float,
+    default=30.0,
+    help='HTTP 连接超时秒数 (默认: 30)'
+  )
+  parser.add_argument(
+    '--download-read-timeout',
+    type=float,
+    default=60 * 60,
+    help='下载读取超时秒数，超过该时间未收到数据将超时 (默认: 3600，0 表示不限制)'
+  )
+  parser.add_argument(
     '--personal-base-token',
     default=None,
     help='可选：用于授权码下载模式的 Personal Base Token'
@@ -68,6 +80,8 @@ def main() -> None:
     output_dir=Path(args.output),
     log_level=args.log_level,
     download_concurrency=args.download_concurrency,
+    http_connect_timeout_seconds=args.http_connect_timeout,
+    download_read_timeout_seconds=args.download_read_timeout,
     personal_base_token=personal_token
   )
   try:

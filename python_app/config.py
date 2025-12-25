@@ -15,6 +15,8 @@ class ServerConfig:
   output_dir: Path = Path('downloads')
   log_level: str = 'INFO'
   download_concurrency: int = 20
+  http_connect_timeout_seconds: float = 30.0
+  download_read_timeout_seconds: float = 60 * 60
   personal_base_token: Optional[str] = None
 
   def ensure_output_dir(self) -> Path:
@@ -26,6 +28,24 @@ class ServerConfig:
   def normalized_concurrency(self) -> int:
     """返回合法的默认并发数。"""
     return max(1, int(self.download_concurrency or 1))
+
+  def normalized_http_connect_timeout(self) -> float:
+    """返回合法的 HTTP 连接超时秒数（<=0 或非法值将回退到 30 秒）。"""
+    try:
+      value = float(self.http_connect_timeout_seconds)
+    except (TypeError, ValueError):
+      return 30.0
+    return value if value > 0 else 30.0
+
+  def normalized_download_read_timeout(self) -> Optional[float]:
+    """返回合法的下载读取超时秒数（<=0 表示不限制读超时）。"""
+    try:
+      value = float(self.download_read_timeout_seconds)
+    except (TypeError, ValueError):
+      return float(60 * 60)
+    if value <= 0:
+      return None
+    return value
 
   def normalized_personal_token(self) -> Optional[str]:
     """返回去除空白的授权码，若为空则返回 None。"""
