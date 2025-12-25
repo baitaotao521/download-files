@@ -56,6 +56,7 @@
   "msg_open_output_failed": "No se pudo abrir el directorio de guardado: {error}",
   "msg_open_config_failed": "No se pudo abrir el archivo de configuración: {error}",
   "msg_invalid_file_limit": "La cantidad de filas debe estar entre 100 y 5000.",
+  "msg_job_completed_open_dir": "Descarga finalizada: {success}/{total} correctas, {failed} fallidas.\nCarpeta de guardado: {path}\n¿Abrir la carpeta de guardado?",
   "msg_exit_running": "El servicio sigue en ejecución. ¿Detenerlo y salir?",
   "language_option_zh": "简体中文",
   "language_option_en": "English",

@@ -56,6 +56,7 @@
   "msg_open_output_failed": "保存先のオープンに失敗しました: {error}",
   "msg_open_config_failed": "設定ファイルのオープンに失敗しました: {error}",
   "msg_invalid_file_limit": "表示件数は 100〜5000 の範囲で設定してください。",
+  "msg_job_completed_open_dir": "ダウンロード完了：成功 {success}/{total}、失敗 {failed}。\n保存先：{path}\n保存先フォルダを開きますか？",
   "msg_exit_running": "サービスが稼働中です。停止して終了しますか？",
   "language_option_zh": "简体中文",
   "language_option_en": "English",

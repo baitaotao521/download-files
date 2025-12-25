@@ -28,7 +28,13 @@ except ImportError:  # noqa: WPS440
 WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
+WEBSOCKET_REFRESH_TYPE = 'feishu_attachment_refresh'
 ACK_MESSAGE_TYPE = 'feishu_attachment_ack'
+
+# 仅限制“向前端请求临时链接”的并发数，避免一次性触发大量 refresh 导致排队超时。
+DOWNLOAD_URL_REFRESH_MAX_INFLIGHT = 20
+# 等待前端回传临时链接的超时时间（秒），可覆盖“前端繁忙/限流”导致的短暂延迟。
+DOWNLOAD_URL_REFRESH_TIMEOUT_SECONDS = 10 * 60
 
 
 class DownloadJobState:
@@ -40,6 +46,7 @@ class DownloadJobState:
     self.http_session = session
     self.semaphore: Optional[asyncio.Semaphore] = None
     self.tasks: Set[asyncio.Task] = set()
+    self._finalize_task: Optional[asyncio.Task] = None
     self.configured = False
     self.zip_after = False
     self.job_dir: Optional[Path] = None
@@ -51,6 +58,70 @@ class DownloadJobState:
     self.app_token: Optional[str] = None
     self.table_id: Optional[str] = None
     self.sdk_client: Any = None
+    self._download_url_refresh_waiters: Dict[str, asyncio.Future[str]] = {}
+    self._download_url_refresh_cache: Dict[str, str] = {}
+    self._download_url_refresh_semaphore = asyncio.Semaphore(DOWNLOAD_URL_REFRESH_MAX_INFLIGHT)
+
+  async def request_download_url_refresh(
+    self,
+    websocket,
+    *,
+    order: Optional[int],
+    file_key: str,
+    file_name: str
+  ) -> str:
+    """向前端请求刷新 downloadUrl，并等待新的临时链接返回。"""
+    if order is None:
+      raise RuntimeError('missing order for download url refresh')
+    cached_url = self._download_url_refresh_cache.pop(file_key, None)
+    if cached_url:
+      logging.debug('consume cached download url for %s (%s)', file_name, file_key)
+      return cached_url
+    async with self._download_url_refresh_semaphore:
+      waiter = self._download_url_refresh_waiters.get(file_key)
+      if not waiter or waiter.done():
+        waiter = asyncio.get_running_loop().create_future()
+        self._download_url_refresh_waiters[file_key] = waiter
+      await self.handler._send_ack(
+        websocket,
+        status='refresh',
+        message='正在向前端请求新的下载链接…',
+        order=order,
+        extra={'stage': 'refresh', 'name': file_name}
+      )
+      try:
+        return await asyncio.wait_for(waiter, timeout=DOWNLOAD_URL_REFRESH_TIMEOUT_SECONDS)
+      except asyncio.TimeoutError as exc:
+        raise TimeoutError('等待前端刷新下载链接超时') from exc
+      finally:
+        self._download_url_refresh_waiters.pop(file_key, None)
+
+  def provide_download_url_refresh(self, data: Dict[str, Any]) -> None:
+    """接收前端回传的新 downloadUrl，并唤醒等待中的下载任务。"""
+    order = data.get('order')
+    download_url = data.get('downloadUrl')
+    error = data.get('error')
+    try:
+      parsed_order = int(order)
+    except (TypeError, ValueError):
+      logging.debug('skip invalid refresh payload: %s', data)
+      return
+    file_key = f'order-{parsed_order}'
+    waiter = self._download_url_refresh_waiters.get(file_key)
+    if not waiter or waiter.done():
+      if download_url and not error:
+        self._download_url_refresh_cache[file_key] = str(download_url)
+        logging.debug('cache refresh download url for order=%s', parsed_order)
+      else:
+        logging.debug('no waiter for refresh order=%s', parsed_order)
+      return
+    if error:
+      waiter.set_exception(RuntimeError(str(error)))
+      return
+    if not download_url:
+      waiter.set_exception(RuntimeError('refresh download url is empty'))
+      return
+    waiter.set_result(str(download_url))
 
   def _coerce_concurrency(self, value: Any, *, fallback: int) -> int:
     """解析并校验前端传入的并发数，确保落在 1-50 范围内（主要用于授权码模式）。"""
@@ -174,8 +245,31 @@ class DownloadJobState:
     self.completed = True
     self.handler._monitor_job_finished()
 
+  def schedule_finalize(self, websocket) -> None:
+    """后台触发 finalize，避免阻塞 WebSocket 收消息（refresh 链接需要继续接收）。"""
+    if self._finalize_task and not self._finalize_task.done():
+      return
+
+    async def _run_finalize() -> None:
+      try:
+        await self.finalize(websocket)
+      except Exception:  # noqa: BLE001
+        logging.exception('finalize task failed')
+
+    self._finalize_task = asyncio.create_task(_run_finalize())
+
   async def shutdown(self) -> None:
     """在连接异常结束时取消挂起任务。"""
+    if self._finalize_task and not self._finalize_task.done():
+      self._finalize_task.cancel()
+      await asyncio.gather(self._finalize_task, return_exceptions=True)
+    self._finalize_task = None
+    waiters = list(self._download_url_refresh_waiters.values())
+    self._download_url_refresh_waiters.clear()
+    self._download_url_refresh_cache.clear()
+    for waiter in waiters:
+      if not waiter.done():
+        waiter.cancel()
     if not self.tasks:
       self.handler._monitor_job_finished()
       return
@@ -206,12 +300,14 @@ class DownloadJobState:
     order = file_info.get('order')
     identifier = record_id or file_token or download_url
     file_key = self.handler._build_file_key(order, file_name, relative_path, identifier)
+
     self.handler._monitor_file_registered(
       file_key,
       name=file_name or 'unknown',
       size=int(file_info.get('size') or 0),
       path=str(relative_path or '')
     )
+
     if not file_name:
       await self.handler._send_ack(
         websocket,
@@ -221,6 +317,7 @@ class DownloadJobState:
       )
       self.handler._monitor_file_status(file_key, 'failed', error='missing file name')
       return
+
     if self.download_mode == 'token':
       if not all([file_token, field_id, record_id, self.table_id, self.sdk_client]):
         await self.handler._send_ack(
@@ -231,20 +328,23 @@ class DownloadJobState:
         )
         self.handler._monitor_file_status(file_key, 'failed', error='authorization payload missing identifiers')
         return
-    elif not download_url:
+
+    if self.download_mode == 'url' and not download_url and not isinstance(order, int):
       await self.handler._send_ack(
         websocket,
         status='error',
-        message='missing downloadUrl or name',
+        message='missing downloadUrl and order; cannot request url refresh.',
         order=order
       )
-      self.handler._monitor_file_status(file_key, 'failed', error='missing download url')
+      self.handler._monitor_file_status(file_key, 'failed', error='missing download url and order')
       return
+
     success = False
     saved_path = None
     last_error: Optional[str] = None
     self.handler._monitor_download_started()
     self.handler._monitor_file_status(file_key, 'downloading')
+
     for attempt in range(1, 4):
       try:
         target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
@@ -259,28 +359,64 @@ class DownloadJobState:
             file_key=file_key
           )
         else:
-          saved_path = await self.handler._download_file(self.http_session, download_url, target_path, file_key=file_key)
+          if not download_url:
+            download_url = await self.request_download_url_refresh(
+              websocket,
+              order=order if isinstance(order, int) else None,
+              file_key=file_key,
+              file_name=file_name
+            )
+          saved_path = await self.handler._download_file(
+            self.http_session,
+            download_url,
+            target_path,
+            file_key=file_key
+          )
         success = True
         break
       except ValueError as exc:
         last_error = str(exc)
         break
+      except aiohttp.ClientResponseError as exc:
+        if self.download_mode == 'url' and exc.status == 400:
+          try:
+            download_url = await self.request_download_url_refresh(
+              websocket,
+              order=order if isinstance(order, int) else None,
+              file_key=file_key,
+              file_name=file_name
+            )
+            continue
+          except Exception as refresh_exc:  # noqa: BLE001
+            last_error = self.handler._format_download_exception(refresh_exc)
+            logging.exception('failed to refresh download url for %s (attempt %s/3)', file_name, attempt)
+            if attempt < 3:
+              await asyncio.sleep(0.5)
+              continue
+            break
+        last_error = self.handler._format_download_exception(exc)
+        logging.exception('download failed for %s (attempt %s/3)', file_name, attempt)
+        if attempt < 3:
+          await asyncio.sleep(0.5)
+          continue
       except Exception as exc:  # noqa: BLE001
         last_error = self.handler._format_download_exception(exc)
         logging.exception('download failed for %s (attempt %s/3)', file_name, attempt)
         if attempt < 3:
           await asyncio.sleep(0.5)
           continue
+
     self.handler._monitor_download_finished(success=success)
     if not success:
       self.handler._monitor_file_status(file_key, 'failed', error=last_error or 'download failed')
       await self.handler._send_ack(
         websocket,
         status='error',
-        message=f'download failed after 3 attempts: {last_error}',
+        message=f'download failed after 3 attempts: {last_error or "download failed"}',
         order=order
       )
       return
+
     self.handler._monitor_file_status(file_key, 'completed')
     await self.handler._send_ack(
       websocket,
@@ -393,8 +529,11 @@ class AttachmentDownloader:
     if msg_type == WEBSOCKET_LINK_TYPE:
       await job_state.enqueue_download(data, websocket)
       return
+    if msg_type == WEBSOCKET_REFRESH_TYPE:
+      job_state.provide_download_url_refresh(data)
+      return
     if msg_type == WEBSOCKET_COMPLETE_TYPE:
-      await job_state.finalize(websocket)
+      job_state.schedule_finalize(websocket)
       return
 
     logging.debug('skip unknown message type=%s', msg_type)
@@ -732,6 +871,7 @@ __all__ = [
   'WEBSOCKET_COMPLETE_TYPE',
   'WEBSOCKET_CONFIG_TYPE',
   'WEBSOCKET_LINK_TYPE',
+  'WEBSOCKET_REFRESH_TYPE',
   'AttachmentDownloader',
   'DownloadJobState'
 ]

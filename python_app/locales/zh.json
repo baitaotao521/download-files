@@ -56,6 +56,7 @@
   "msg_open_output_failed": "打开保存目录失败：{error}",
   "msg_open_config_failed": "打开配置文件失败：{error}",
   "msg_invalid_file_limit": "文件显示条数需在 100-5000 之间",
+  "msg_job_completed_open_dir": "下载完成：成功 {success}/{total}，失败 {failed}。\n保存目录：{path}\n是否打开保存目录？",
   "msg_exit_running": "服务仍在运行，确定停止并退出吗？",
   "language_option_zh": "简体中文",
   "language_option_en": "English",

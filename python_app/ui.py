@@ -86,6 +86,9 @@ class DownloaderDesktopApp:
     self.file_display_limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
     self._initial_language_code = self._normalize_language_code(self.user_preferences.language)
     self.file_columns = ('name', 'status', 'progress', 'path')
+    self._completion_prompt_shown = False
+    self._last_overall_total = 0
+    self._last_overall_finished = 0
     self._build_widgets()
     self._set_language(self._initial_language_code)
     self._schedule_log_polling()
@@ -361,12 +364,17 @@ class DownloaderDesktopApp:
     self.log_visible = not self.log_visible
     self._update_log_visibility()
 
+  def _resolve_output_dir(self) -> Path:
+    """解析并确保保存目录存在，返回绝对路径。"""
+    output_path = self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR
+    target = Path(output_path).expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
   def _open_output_dir(self) -> None:
     """打开当前保存目录。"""
-    output_path = self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR
     try:
-      target = Path(output_path).expanduser().resolve()
-      target.mkdir(parents=True, exist_ok=True)
+      target = self._resolve_output_dir()
       if sys.platform.startswith('win'):
         os.startfile(target)  # type: ignore[attr-defined]
       elif sys.platform == 'darwin':
@@ -408,6 +416,62 @@ class DownloaderDesktopApp:
     self._refresh_stats()
     self.root.after(500, self._schedule_stats_refresh)
 
+  def _maybe_prompt_job_completion(self, snapshot: Dict[str, object]) -> None:
+    """在任务完成时弹出提示，并提供打开保存目录的入口。"""
+    overall = snapshot.get('overall') or {}
+    if not isinstance(overall, dict):
+      return
+
+    try:
+      total = int(overall.get('total', 0) or 0)
+      finished = int(overall.get('finished', 0) or 0)
+      success = int(overall.get('completed', 0) or 0)
+      failed = int(overall.get('failed', 0) or 0)
+      active = int(snapshot.get('active', 0) or 0)
+    except (TypeError, ValueError):
+      return
+
+    connected = bool(snapshot.get('connected', False))
+    if not connected or total <= 0:
+      self._completion_prompt_shown = False
+      self._last_overall_total = total
+      self._last_overall_finished = finished
+      return
+
+    if finished < self._last_overall_finished or (total != self._last_overall_total and finished == 0):
+      self._completion_prompt_shown = False
+
+    if self._completion_prompt_shown or active != 0 or finished < total:
+      self._last_overall_total = total
+      self._last_overall_finished = finished
+      return
+
+    try:
+      output_dir = self._resolve_output_dir()
+      path_display = str(output_dir)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to resolve output dir for completion prompt: %s', exc)
+      path_display = str(self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR)
+
+    message = self._t(
+      'msg_job_completed_open_dir',
+      success=success,
+      total=total,
+      failed=failed,
+      path=path_display
+    )
+    try:
+      should_open = messagebox.askyesno(self._t('dialog_confirm_title'), message)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to show completion prompt: %s', exc)
+      should_open = False
+
+    if should_open:
+      self._open_output_dir()
+    self._completion_prompt_shown = True
+    self._last_overall_total = total
+    self._last_overall_finished = finished
+
   def _refresh_stats(self) -> None:
     """将下载统计渲染到界面。"""
     snapshot = self.monitor.snapshot()
@@ -425,6 +489,7 @@ class DownloaderDesktopApp:
     self.total_progress_var.set(self._t('overall_progress', percent=f'{percent:.0f}%', finished=finished, total=total))
     self.total_progress_bar['value'] = percent
     self._refresh_file_table(snapshot.get('files') or [])
+    self._maybe_prompt_job_completion(snapshot)
 
   def _refresh_file_table(self, files: List[Dict[str, object]]) -> None:
     """在表格中渲染单个文件的进度。"""

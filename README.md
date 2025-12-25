@@ -47,7 +47,7 @@ python scripts/ws_desktop.py
 
 1. 在插件表单中将“下载执行方式”切换为“本地客户端下载”。
 2. 展开“高级设置”后填写 Python 服务监听的主机和端口（默认为 `127.0.0.1:11548`）。
-3. 点击下载后，前端会通过 WebSocket 依次推送附件临时链接，由本地 Python 端负责落地保存/打包。
+3. 点击下载后，前端会通过 WebSocket 推送附件元信息（token/字段/记录/文件名/路径等），由本地 Python 端按需向前端请求临时下载链接并落地保存/打包（下载链接有效期约 10 分钟，服务端遇到 `HTTP 400` 会自动触发刷新）。
 
 ### 授权码 + 本地客户端下载模式
 
@@ -61,7 +61,8 @@ python scripts/ws_desktop.py
 插件在下载过程中会按以下顺序向 Python 服务推送 JSON：
 
 1. `feishu_attachment_config`：包含并发数、是否打包、任务名称等关键信息。服务端只有收到该配置才会接受后续文件消息。
-2. `feishu_attachment_link`：携带每个附件的临时下载链接、命名及分类路径。Python 端会基于该信息执行并发下载。
-3. `feishu_attachment_complete`：通知 Python 端开始汇总；若配置了“打包下载”，此时会生成 ZIP 并回传完成状态。
+2. `feishu_attachment_link`：携带每个附件的 token/字段/记录信息、命名及分类路径（`downloadUrl` 可为空）。Python 端会在需要下载时向前端请求临时链接。
+3. `feishu_attachment_refresh`：当 Python 端返回 `feishu_attachment_ack.status=refresh` 时，前端应回传 `{ order, downloadUrl }`，用于刷新临时下载链接（或回传 `{ order, error }`）。
+4. `feishu_attachment_complete`：通知 Python 端开始汇总；若配置了“打包下载”，此时会生成 ZIP 并回传完成状态。
 
 所有阶段的结果（单文件成功/失败、打包完成等）都会通过 `feishu_attachment_ack` 返回给前端，方便 UI 实时展示。

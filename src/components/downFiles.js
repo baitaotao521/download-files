@@ -23,6 +23,7 @@ const DOWNLOAD_WORKER_CONCURRENCY = 10
 const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
+const WEBSOCKET_REFRESH_TYPE = 'feishu_attachment_refresh'
 const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
 class TokenDispatcher {
@@ -332,13 +333,26 @@ class FileDownloader {
     }
     const { token, fieldId, recordId, path, name } = fileInfo
 
-    fileInfo.name = this.getUniqueFileName(name, path)
+    if (!fileInfo.__uniqueNameReady) {
+      fileInfo.name = this.getUniqueFileName(name, path)
+      fileInfo.__uniqueNameReady = true
+    }
     fileInfo.fileUrl = await this.oTable.getAttachmentUrl(
       token,
       fieldId,
       recordId
     )
     return fileInfo.fileUrl
+  }
+  /**
+   * 为桌面端下载预先生成稳定的唯一文件名，避免后续重复改名。
+   */
+  _prepareUniqueFileName(fileInfo) {
+    if (!fileInfo || fileInfo.__uniqueNameReady) {
+      return
+    }
+    fileInfo.name = this.getUniqueFileName(fileInfo.name, fileInfo.path)
+    fileInfo.__uniqueNameReady = true
   }
   /**
    * 处理单个文件，获取内容并写入当前 Zip。
@@ -395,10 +409,18 @@ class FileDownloader {
   /**
    * 本地客户端下载：串行发送链接或鉴权码。
    */
-  async _downloadViaDesktop() {
-    const wsUrl = this._buildWebSocketUrl()
-    const socket = await this._createWebSocket(wsUrl)
-    let abortDownloads = false
+	  async _downloadViaDesktop() {
+	    const wsUrl = this._buildWebSocketUrl()
+	    const socket = await this._createWebSocket(wsUrl)
+	    let abortDownloads = false
+	    // 宏任务延迟：让出事件循环，确保能及时处理服务端 ACK/refresh。
+	    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+	    // WebSocket 发送回压：避免 bufferedAmount 过大导致 refresh 消息排队过久。
+	    const drainSocketBuffer = async(maxBufferedAmount = 2 * 1024 * 1024) => {
+	      while (!abortDownloads && socket.bufferedAmount > maxBufferedAmount) {
+	        await sleep(20)
+	      }
+	    }
     const stopAllDownloads = (reason) => {
       if (abortDownloads) return
       abortDownloads = true
@@ -408,17 +430,70 @@ class FileDownloader {
       }
     }
     const completion = this._bindWebSocketLifecycle(socket, {
-      onFatalError: stopAllDownloads
+      onFatalError: stopAllDownloads,
+      onRefreshUrl: (() => {
+        const fileInfoByOrder = new Map(
+          (this.cellList || []).map((item) => [Number(item?.order), item])
+        )
+        const inflight = new Map()
+        const maxConcurrent = 20
+        let active = 0
+        const waitQueue = []
+        const acquireSlot = async() => {
+          if (active < maxConcurrent) {
+            active += 1
+            return
+          }
+          await new Promise((resolve) => waitQueue.push(resolve))
+          active += 1
+        }
+        const releaseSlot = () => {
+          active = Math.max(active - 1, 0)
+          const next = waitQueue.shift()
+          if (typeof next === 'function') {
+            next()
+          }
+        }
+	        return async(order) => {
+	          if (inflight.has(order)) {
+	            return inflight.get(order)
+	          }
+	          const task = (async() => {
+	            const fileInfo = fileInfoByOrder.get(order)
+	            if (!fileInfo) {
+	              throw new Error($t('file_download_failed'))
+	            }
+	            await acquireSlot()
+	            try {
+	              // refresh 场景必须强制重新拉取临时链接（旧链接 10 分钟后会失效）。
+	              fileInfo.fileUrl = null
+	              const url = await this.getAttachmentUrl(fileInfo)
+	              if (!url) {
+	                throw new Error($t('file_download_failed'))
+	              }
+	              return url
+            } finally {
+              releaseSlot()
+            }
+          })()
+          inflight.set(order, task)
+          try {
+            return await task
+          } finally {
+            inflight.delete(order)
+          }
+        }
+      })()
     })
     const jobId = `${Date.now()}`
     const useTokenMode = this.isTokenWebSocketChannel()
     if (useTokenMode && !this.appToken) {
       throw new Error($t('error_app_token_missing'))
     }
-    try {
-      this._sendWebSocketMessage(socket, {
-        type: WEBSOCKET_CONFIG_TYPE,
-        data: {
+	    try {
+	      this._sendWebSocketMessage(socket, {
+	        type: WEBSOCKET_CONFIG_TYPE,
+	        data: {
           concurrent: 1,
           zipAfterDownload: this.downloadType === 1,
           jobId,
@@ -432,45 +507,53 @@ class FileDownloader {
               appToken: this.appToken
             }
             : {})
-        }
-      })
-      for (const fileInfo of this.cellList) {
-        if (abortDownloads) break
-        const { order } = fileInfo
-        try {
-          if (!useTokenMode && !fileInfo.fileUrl) {
-            await this.getAttachmentUrl(fileInfo)
-          }
-          if (abortDownloads) break
-          this.emit('progress', {
-            index: order,
-            name: fileInfo.name,
-            size: fileInfo.size,
-            percentage: 0
-          })
-          const payload = {
-            name: fileInfo.name,
-            path: fileInfo.path,
-            order: fileInfo.order,
-            size: fileInfo.size
-          }
-          if (useTokenMode) {
+	        }
+	      })
+	      let sentCount = 0
+	      for (const fileInfo of this.cellList) {
+		        if (abortDownloads) break
+		        const { order } = fileInfo
+		        try {
+		          this._prepareUniqueFileName(fileInfo)
+		          if (abortDownloads) break
+	          this.emit('progress', {
+	            index: order,
+	            name: fileInfo.name,
+	            size: fileInfo.size,
+	            percentage: 0
+	          })
+	          const payload = {
+	            name: fileInfo.name,
+	            path: fileInfo.path,
+	            order: fileInfo.order,
+	            size: fileInfo.size
+	          }
+	          if (useTokenMode) {
+	            payload.token = fileInfo.token
+	            payload.fieldId = fileInfo.fieldId
+	            payload.recordId = fileInfo.recordId
+            await this._acquireTokenModeSlot(() => abortDownloads)
+          } else {
             payload.token = fileInfo.token
             payload.fieldId = fileInfo.fieldId
             payload.recordId = fileInfo.recordId
-            await this._acquireTokenModeSlot(() => abortDownloads)
-          } else {
-            payload.downloadUrl = fileInfo.fileUrl
           }
-          if (abortDownloads) break
-          this._sendWebSocketMessage(socket, {
-            type: WEBSOCKET_LINK_TYPE,
-            data: payload
-          })
-        } catch (error) {
-          const message = error?.message || $t('file_download_failed')
-          this.emit('error', {
-            index: order,
+	          if (abortDownloads) break
+	          this._sendWebSocketMessage(socket, {
+	            type: WEBSOCKET_LINK_TYPE,
+	            data: payload
+	          })
+	          sentCount += 1
+	          if (!useTokenMode) {
+	            if (sentCount % 50 === 0) {
+	              await sleep(0)
+	            }
+	            await drainSocketBuffer()
+	          }
+	        } catch (error) {
+	          const message = error?.message || $t('file_download_failed')
+	          this.emit('error', {
+	            index: order,
             message
           })
           stopAllDownloads(error)
@@ -577,6 +660,35 @@ class FileDownloader {
                 index: order,
                 percentage: 100
               })
+	            } else if (status === 'refresh') {
+	              const message = data.message || $t('file_download_failed')
+	              if (typeof hooks.onRefreshUrl === 'function') {
+	                Promise.resolve()
+	                  .then(() => hooks.onRefreshUrl(order, data))
+                  .then((downloadUrl) => {
+                    this._sendWebSocketMessage(socket, {
+                      type: WEBSOCKET_REFRESH_TYPE,
+                      data: {
+                        order,
+                        downloadUrl
+                      }
+                    })
+                  })
+                  .catch((error) => {
+                    const errorMessage = error?.message || message
+                    try {
+                      this._sendWebSocketMessage(socket, {
+                        type: WEBSOCKET_REFRESH_TYPE,
+                        data: {
+                          order,
+                          error: errorMessage
+                        }
+                      })
+                    } catch (sendError) {
+                      console.error('failed to send refresh error', sendError)
+                    }
+                  })
+              }
             } else {
               this.emit('error', {
                 index: order,

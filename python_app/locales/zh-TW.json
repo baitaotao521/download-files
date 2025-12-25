@@ -56,6 +56,7 @@
   "msg_open_output_failed": "打開保存目錄失敗：{error}",
   "msg_open_config_failed": "打開設定檔失敗：{error}",
   "msg_invalid_file_limit": "檔案顯示筆數需介於 100-5000",
+  "msg_job_completed_open_dir": "下載完成：成功 {success}/{total}，失敗 {failed}。\n保存目錄：{path}\n是否打開保存目錄？",
   "msg_exit_running": "服務仍在運行，確定停止並退出嗎？",
   "language_option_zh": "简体中文",
   "language_option_en": "English",
