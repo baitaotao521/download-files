@@ -3,6 +3,7 @@ import { saveAs } from 'file-saver'
 import JSZip from 'jszip'
 import axios from 'axios'
 import { chunkArrayByMaxSize } from '@/utils/index.js'
+import { ElMessageBox } from 'element-plus'
 
 import { i18n } from '@/locales/i18n.js'
 import to from 'await-to-js'
@@ -18,13 +19,38 @@ const $t = i18n.global.t
 const MAX_ZIP_SIZE_NUM = 1
 
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
-// 下载工作线程并发数
-const DOWNLOAD_WORKER_CONCURRENCY = 10
+// 下载工作线程并发数（普通模式不限制）。
+const DOWNLOAD_WORKER_CONCURRENCY = Number.POSITIVE_INFINITY
 const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
 const WEBSOCKET_REFRESH_TYPE = 'feishu_attachment_refresh'
 const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
+
+const MIN_DESKTOP_CLIENT_VERSION = '1.1.5'
+const DESKTOP_CLIENT_UPDATE_URL =
+  'https://xcnfciyevzhz.feishu.cn/wiki/J9bdwozIViVC4ZkOuKAcSbAQnKQ'
+
+/**
+ * 比较语义化版本号，返回 -1/0/1（仅比较前三段数字）。
+ */
+const compareSemanticVersions = (left, right) => {
+  const parse = (value) => {
+    const parts = String(value || '')
+      .trim()
+      .replace(/^v/i, '')
+      .split('.')
+      .map((item) => Number.parseInt(item, 10))
+    return [parts[0] || 0, parts[1] || 0, parts[2] || 0]
+  }
+  const a = parse(left)
+  const b = parse(right)
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] > b[i]) return 1
+    if (a[i] < b[i]) return -1
+  }
+  return 0
+}
 
 class TokenDispatcher {
   /**
@@ -222,9 +248,10 @@ class FileDownloader {
    * 设置附件的目录路径（一级/二级目录）。
    */
   async setFolderPath() {
-    // 逐个下载
-    if (this.downloadType !== 1) return
-    // zip不需要文件夹分类
+    const supportsFolderClassification = this.isWebSocketChannel() || this.downloadType === 1
+
+    // 不支持文件夹分类的模式直接跳过（浏览器逐个下载无法落地文件夹）。
+    if (!supportsFolderClassification) return
     if (!this.downloadTypeByFolders) return
 
     // 封装获取和处理文件夹名称的逻辑
@@ -409,18 +436,30 @@ class FileDownloader {
   /**
    * 本地客户端下载：串行发送链接或鉴权码。
    */
-	  async _downloadViaDesktop() {
-	    const wsUrl = this._buildWebSocketUrl()
-	    const socket = await this._createWebSocket(wsUrl)
-	    let abortDownloads = false
-	    // 宏任务延迟：让出事件循环，确保能及时处理服务端 ACK/refresh。
-	    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-	    // WebSocket 发送回压：避免 bufferedAmount 过大导致 refresh 消息排队过久。
-	    const drainSocketBuffer = async(maxBufferedAmount = 2 * 1024 * 1024) => {
-	      while (!abortDownloads && socket.bufferedAmount > maxBufferedAmount) {
-	        await sleep(20)
-	      }
-	    }
+  async _downloadViaDesktop() {
+    const wsUrl = this._buildWebSocketUrl()
+    const socket = await this._createWebSocket(wsUrl)
+    let abortDownloads = false
+    let resolveServerInfo = null
+    let rejectServerInfo = null
+    const serverInfoPromise = new Promise((resolve, reject) => {
+      resolveServerInfo = resolve
+      rejectServerInfo = reject
+    })
+    const serverInfoTimer = setTimeout(() => {
+      if (typeof resolveServerInfo === 'function') {
+        resolveServerInfo(null)
+      }
+    }, 3000)
+    // 宏任务延迟：让出事件循环，确保能及时处理服务端 ACK/refresh。
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    // WebSocket 发送回压：避免 bufferedAmount 过大导致 refresh 消息排队过久。
+    const drainSocketBuffer = async(maxBufferedAmount = 2 * 1024 * 1024) => {
+      while (socket.bufferedAmount > maxBufferedAmount) {
+        if (abortDownloads) return
+        await sleep(20)
+      }
+    }
     const stopAllDownloads = (reason) => {
       if (abortDownloads) return
       abortDownloads = true
@@ -428,15 +467,24 @@ class FileDownloader {
       if (message) {
         this.emit('warn', message)
       }
+      if (typeof rejectServerInfo === 'function') {
+        rejectServerInfo(new Error(message || $t('file_download_failed')))
+      }
     }
     const completion = this._bindWebSocketLifecycle(socket, {
       onFatalError: stopAllDownloads,
+      onServerInfo: (info) => {
+        clearTimeout(serverInfoTimer)
+        if (typeof resolveServerInfo === 'function') {
+          resolveServerInfo(info)
+        }
+      },
       onRefreshUrl: (() => {
         const fileInfoByOrder = new Map(
           (this.cellList || []).map((item) => [Number(item?.order), item])
         )
         const inflight = new Map()
-        const maxConcurrent = 20
+        const maxConcurrent = Number.POSITIVE_INFINITY
         let active = 0
         const waitQueue = []
         const acquireSlot = async() => {
@@ -454,24 +502,24 @@ class FileDownloader {
             next()
           }
         }
-	        return async(order) => {
-	          if (inflight.has(order)) {
-	            return inflight.get(order)
-	          }
-	          const task = (async() => {
-	            const fileInfo = fileInfoByOrder.get(order)
-	            if (!fileInfo) {
-	              throw new Error($t('file_download_failed'))
-	            }
-	            await acquireSlot()
-	            try {
-	              // refresh 场景必须强制重新拉取临时链接（旧链接 10 分钟后会失效）。
-	              fileInfo.fileUrl = null
-	              const url = await this.getAttachmentUrl(fileInfo)
-	              if (!url) {
-	                throw new Error($t('file_download_failed'))
-	              }
-	              return url
+        return async(order) => {
+          if (inflight.has(order)) {
+            return inflight.get(order)
+          }
+          const task = (async() => {
+            const fileInfo = fileInfoByOrder.get(order)
+            if (!fileInfo) {
+              throw new Error($t('file_download_failed'))
+            }
+            await acquireSlot()
+            try {
+              // refresh 场景必须强制重新拉取临时链接（旧链接 10 分钟后会失效）。
+              fileInfo.fileUrl = null
+              const url = await this.getAttachmentUrl(fileInfo)
+              if (!url) {
+                throw new Error($t('file_download_failed'))
+              }
+              return url
             } finally {
               releaseSlot()
             }
@@ -490,12 +538,12 @@ class FileDownloader {
     if (useTokenMode && !this.appToken) {
       throw new Error($t('error_app_token_missing'))
     }
-	    try {
-	      this._sendWebSocketMessage(socket, {
-	        type: WEBSOCKET_CONFIG_TYPE,
-	        data: {
+    try {
+      this._sendWebSocketMessage(socket, {
+        type: WEBSOCKET_CONFIG_TYPE,
+        data: {
           concurrent: 1,
-          zipAfterDownload: this.downloadType === 1,
+          zipAfterDownload: Boolean(this.zipAfterDownload),
           jobId,
           jobName: this.zipName || jobId,
           zipName: this.zipName || jobId,
@@ -507,53 +555,80 @@ class FileDownloader {
               appToken: this.appToken
             }
             : {})
-	        }
-	      })
-	      let sentCount = 0
-	      for (const fileInfo of this.cellList) {
-		        if (abortDownloads) break
-		        const { order } = fileInfo
-		        try {
-		          this._prepareUniqueFileName(fileInfo)
-		          if (abortDownloads) break
-	          this.emit('progress', {
-	            index: order,
-	            name: fileInfo.name,
-	            size: fileInfo.size,
-	            percentage: 0
-	          })
-	          const payload = {
-	            name: fileInfo.name,
-	            path: fileInfo.path,
-	            order: fileInfo.order,
-	            size: fileInfo.size
-	          }
-	          if (useTokenMode) {
-	            payload.token = fileInfo.token
-	            payload.fieldId = fileInfo.fieldId
-	            payload.recordId = fileInfo.recordId
+        }
+      })
+      const serverInfo = await serverInfoPromise
+      const serverVersion = String(serverInfo?.version || '').trim()
+      if (!serverVersion || compareSemanticVersions(serverVersion, MIN_DESKTOP_CLIENT_VERSION) < 0) {
+        const displayedVersion = serverVersion || 'unknown'
+        const message = $t('desktop_client_update_required', {
+          current: displayedVersion,
+          required: MIN_DESKTOP_CLIENT_VERSION,
+          url: DESKTOP_CLIENT_UPDATE_URL
+        })
+        stopAllDownloads(message)
+        try {
+          await ElMessageBox.confirm(
+            message,
+            $t('desktop_client_update_title'),
+            {
+              type: 'warning',
+              confirmButtonText: $t('desktop_client_update_open'),
+              cancelButtonText: $t('desktop_client_update_cancel'),
+              closeOnClickModal: false,
+              closeOnPressEscape: false
+            }
+          )
+          window.open(DESKTOP_CLIENT_UPDATE_URL, '_blank')
+        } catch (error) {
+          // 用户取消或弹窗失败时，保持终止下载即可。
+        }
+      }
+      let sentCount = 0
+      for (const fileInfo of this.cellList) {
+        if (abortDownloads) break
+        const { order } = fileInfo
+        try {
+          this._prepareUniqueFileName(fileInfo)
+          if (abortDownloads) break
+          this.emit('progress', {
+            index: order,
+            name: fileInfo.name,
+            size: fileInfo.size,
+            percentage: 0
+          })
+          const payload = {
+            name: fileInfo.name,
+            path: fileInfo.path,
+            order: fileInfo.order,
+            size: fileInfo.size
+          }
+          if (useTokenMode) {
+            payload.token = fileInfo.token
+            payload.fieldId = fileInfo.fieldId
+            payload.recordId = fileInfo.recordId
             await this._acquireTokenModeSlot(() => abortDownloads)
           } else {
             payload.token = fileInfo.token
             payload.fieldId = fileInfo.fieldId
             payload.recordId = fileInfo.recordId
           }
-	          if (abortDownloads) break
-	          this._sendWebSocketMessage(socket, {
-	            type: WEBSOCKET_LINK_TYPE,
-	            data: payload
-	          })
-	          sentCount += 1
-	          if (!useTokenMode) {
-	            if (sentCount % 50 === 0) {
-	              await sleep(0)
-	            }
-	            await drainSocketBuffer()
-	          }
-	        } catch (error) {
-	          const message = error?.message || $t('file_download_failed')
-	          this.emit('error', {
-	            index: order,
+          if (abortDownloads) break
+          this._sendWebSocketMessage(socket, {
+            type: WEBSOCKET_LINK_TYPE,
+            data: payload
+          })
+          sentCount += 1
+          if (!useTokenMode) {
+            if (sentCount % 50 === 0) {
+              await sleep(0)
+            }
+            await drainSocketBuffer()
+          }
+        } catch (error) {
+          const message = error?.message || $t('file_download_failed')
+          this.emit('error', {
+            index: order,
             message
           })
           stopAllDownloads(error)
@@ -576,6 +651,7 @@ class FileDownloader {
         await completion.catch(() => {})
       }
     } finally {
+      clearTimeout(serverInfoTimer)
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close()
       }
@@ -654,17 +730,27 @@ class FileDownloader {
           const order = Number(rawOrder)
           const status = data.status
           const stage = data.stage
+          if (stage === 'server_info') {
+            if (typeof hooks.onServerInfo === 'function') {
+              try {
+                hooks.onServerInfo(data)
+              } catch (err) {
+                console.error('onServerInfo hook failed', err)
+              }
+            }
+            return
+          }
           if (Number.isInteger(order) && order > 0) {
             if (status === 'success') {
               this.emit('progress', {
                 index: order,
                 percentage: 100
               })
-	            } else if (status === 'refresh') {
-	              const message = data.message || $t('file_download_failed')
-	              if (typeof hooks.onRefreshUrl === 'function') {
-	                Promise.resolve()
-	                  .then(() => hooks.onRefreshUrl(order, data))
+            } else if (status === 'refresh') {
+              const message = data.message || $t('file_download_failed')
+              if (typeof hooks.onRefreshUrl === 'function') {
+                Promise.resolve()
+                  .then(() => hooks.onRefreshUrl(order, data))
                   .then((downloadUrl) => {
                     this._sendWebSocketMessage(socket, {
                       type: WEBSOCKET_REFRESH_TYPE,

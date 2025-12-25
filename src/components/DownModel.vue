@@ -21,9 +21,9 @@
       <p style="color:red" v-if="!!zipError">{{ $t('text11') }}</p>
 
       <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 8px;">
-        <el-button 
+        <el-button
           v-if="getFailedIdsLength > 0"
-          size="small" 
+          size="small"
           :type="showFailedOnly ? 'primary' : 'default'"
           @click="showFailedOnly = !showFailedOnly"
         >

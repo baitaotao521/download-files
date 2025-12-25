@@ -17,6 +17,7 @@ import websockets
 
 from .config import ServerConfig
 from .monitor import DownloadMonitor
+from .version import APP_VERSION
 
 try:  # pragma: no cover - optional dependency for授权模式
   from baseopensdk import BaseClient
@@ -169,6 +170,13 @@ class DownloadJobState:
     if self.download_mode == 'token':
       self.semaphore = asyncio.Semaphore(concurrent)
     self.handler._monitor_job_started(self.total)
+    await self.handler._send_ack(
+      websocket,
+      status='success',
+      message='server info',
+      order=None,
+      extra={'stage': 'server_info', 'version': APP_VERSION}
+    )
     concurrent_label = concurrent if self.semaphore else 'unlimited'
     logging.info('job configured: job_id=%s concurrent=%s zip=%s', self.job_id, concurrent_label, zip_after)
     return True

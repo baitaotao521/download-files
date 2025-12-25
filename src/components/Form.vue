@@ -174,28 +174,51 @@
         </template>
         <el-input v-model="formData.nameMark" />
       </el-form-item>
-      <el-form-item :label="$t('download_channel')" prop="downloadChannel">
-        <el-select
-          v-model="formData.downloadChannel"
-          :placeholder="$t('select_download_channel')"
-          style="width: 100%"
-        >
-          <el-option :label="$t('download_channel_browser')" value="browser" />
-          <el-option :label="$t('download_channel_ws')" value="websocket" />
-          <el-option :label="$t('download_channel_ws_auth')" value="websocket_auth" />
-        </el-select>
-      </el-form-item>
+        <el-form-item :label="$t('download_channel')" prop="downloadChannel">
+          <el-select
+            v-model="formData.downloadChannel"
+            :placeholder="$t('select_download_channel')"
+            style="width: 100%"
+          >
+            <el-option :label="$t('download_channel_browser')" value="browser" />
+            <el-option :label="$t('download_channel_ws')" value="websocket" />
+            <el-option :label="$t('download_channel_ws_auth')" value="websocket_auth" />
+          </el-select>
+          <p v-if="requiresDesktopClient" class="advanced-tip" style="margin-top: 8px;">
+            <a
+              class="advanced-link"
+              :href="desktopUsageGuideUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+            >{{ $t('desktop_usage_guide') }}</a>
+          </p>
+        </el-form-item>
 
-      <el-form-item :label="$t('download_method')" prop="downloadType">
-        <el-select
-          v-model="formData.downloadType"
-          :placeholder="$t('select_download_method')"
-          style="width: 100%"
+        <el-form-item
+          v-if="!requiresDesktopClient"
+          :label="$t('download_method')"
+          prop="downloadType"
         >
-          <el-option :label="$t('download_individual_files')" :value="2" />
-          <el-option :label="$t('zip_download')" :value="1" />
-        </el-select>
-      </el-form-item>
+          <el-select
+            v-model="formData.downloadType"
+            :placeholder="$t('select_download_method')"
+            style="width: 100%"
+          >
+            <el-option :label="$t('download_individual_files')" :value="2" />
+            <el-option :label="$t('zip_download')" :value="1" />
+          </el-select>
+        </el-form-item>
+        <el-form-item
+          v-if="requiresDesktopClient"
+          :label="$t('zip_after_download')"
+          prop="zipAfterDownload"
+        >
+          <el-switch
+            v-model="formData.zipAfterDownload"
+            :active-text="$t('yes')"
+            :inactive-text="$t('no')"
+          />
+        </el-form-item>
 <!--      <el-form-item-->
 <!--        :label="$t('text24')"-->
 <!--        prop="concurrentDownloads"-->
@@ -225,15 +248,15 @@
 <!--          style="width: 100%"-->
 <!--        />-->
 <!--      </el-form-item>-->
-      <div style="display: flex">
-        <el-form-item
-          prop="downloadTypeByFolders"
-          v-if="formData.downloadType === 1"
-        >
-          <template #label>
-            <p style="display: flex; align-items: center">
-              <span style="margin-right: 2px">{{
-                $t("folder_classification")
+        <div style="display: flex">
+          <el-form-item
+            prop="downloadTypeByFolders"
+            v-if="folderClassificationAvailable"
+          >
+            <template #label>
+              <p style="display: flex; align-items: center">
+                <span style="margin-right: 2px">{{
+                  $t("folder_classification")
               }}</span>
               <el-popover
                 placement="top-start"
@@ -256,15 +279,15 @@
         </el-form-item>
       </div>
 
-      <el-form-item
-        :label="$t('first_directory')"
-        prop="firstFolderKey"
-        v-if="formData.downloadType === 1 && formData.downloadTypeByFolders"
-      >
-        <el-select
-          v-model="formData.firstFolderKey"
-          :placeholder="$t('select_first_directory')"
-          style="width: 100%"
+        <el-form-item
+          :label="$t('first_directory')"
+          prop="firstFolderKey"
+          v-if="folderClassificationAvailable && formData.downloadTypeByFolders"
+        >
+          <el-select
+            v-model="formData.firstFolderKey"
+            :placeholder="$t('select_first_directory')"
+            style="width: 100%"
           clearable
         >
           <el-option
@@ -275,14 +298,14 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item
-        :label="$t('second_directory')"
-        prop="secondFolderKey"
-        v-if="formData.downloadType === 1 && formData.downloadTypeByFolders"
-      >
-        <el-select
-          clearable
-          v-model="formData.secondFolderKey"
+        <el-form-item
+          :label="$t('second_directory')"
+          prop="secondFolderKey"
+          v-if="folderClassificationAvailable && formData.downloadTypeByFolders"
+        >
+          <el-select
+            clearable
+            v-model="formData.secondFolderKey"
           :placeholder="$t('select_second_directory')"
           style="width: 100%"
         >
@@ -426,6 +449,8 @@ import { SUPPORT_TYPES, getInfoByTableMetaList, sortByOrder } from '@/hooks/useB
 import { i18n } from '@/locales/i18n.js'
 
 const $t = i18n.global.t
+const desktopUsageGuideUrl =
+  'https://p6bgwki4n6.feishu.cn/docx/Pn7Kdw2rPocwPZxVfF5cMsAcnle#share-P1DidKxwIoVRO9xruLecXk4snLV'
 const elform = ref(null)
 const loading = ref(true)
 const downModelVis = ref(false)
@@ -442,6 +467,7 @@ const formData = reactive({
   viewId: '',
   downloadChannel: 'browser',
   downloadType: 1,
+  zipAfterDownload: false,
   downloadTypeByFolders: false,
   firstFolderKey: '',
   secondFolderKey: '',
@@ -452,6 +478,12 @@ const formData = reactive({
   selectedRecordIds: []
 })
 const requiresDesktopClient = computed(() => desktopChannels.includes(formData.downloadChannel))
+const folderClassificationAvailable = computed(() => {
+  if (requiresDesktopClient.value) {
+    return true
+  }
+  return formData.downloadType === 1
+})
 const rules = reactive({
   tableId: [
     {
@@ -503,8 +535,17 @@ const rules = reactive({
 
   downloadType: [
     {
-      required: true,
-      message: '请选择文件下载方式',
+      validator: (rule, value, callback) => {
+        if (desktopChannels.includes(formData.downloadChannel)) {
+          callback()
+          return
+        }
+        if (value === undefined || value === null || value === '') {
+          callback(new Error('请选择文件下载方式'))
+          return
+        }
+        callback()
+      },
       trigger: 'change'
     }
   ],
@@ -706,6 +747,9 @@ watch(
   (channel) => {
     if (channel !== 'websocket_auth' && elform.value) {
       elform.value.clearValidate('tokenPushBatchSize')
+    }
+    if (desktopChannels.includes(channel) && elform.value) {
+      elform.value.clearValidate('downloadType')
     }
   }
 )
@@ -934,5 +978,14 @@ onMounted(async() => {
   font-size: 13px;
   color: var(--N500);
   margin-bottom: 12px;
+}
+
+.advanced-link {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+
+.advanced-link:hover {
+  text-decoration: underline;
 }
 </style>
