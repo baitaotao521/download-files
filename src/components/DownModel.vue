@@ -38,10 +38,9 @@
       >
         <el-table-column type="index" width="50" />
         <el-table-column prop="name" :label="$t('text12')" width="" />
-        <el-table-column prop="percentage" :label="$t('text13')">
+      <el-table-column prop="percentage" :label="$t('text13')">
           <template #default="scope">
-            {{ scope.row.percentage
-            }}{{ scope.row.type === "error" ? "" : "%" }}
+            {{ scope.row.percentage }}%
           </template>
         </el-table-column>
         <el-table-column prop="size" :label="$t('text14')">
@@ -72,6 +71,11 @@
               size="small"
               >{{ $t('text18') }}</el-button
             >
+          </template>
+        </el-table-column>
+        <el-table-column prop="errorMessage" :label="$t('error_message')">
+          <template #default="scope">
+            <span v-if="scope.row.type === 'error'">{{ scope.row.errorMessage }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -145,7 +149,11 @@ const removeFromFailedDisplay = (index) => {
 }
 
 const percent = computed(() => {
-  const val = ((getCompletedIdsLength.value / totalLength.value) * 100).toFixed(2) - 0
+  const finished = getCompletedIdsLength.value + getFailedIdsLength.value
+  if (!totalLength.value) {
+    return 0
+  }
+  const val = ((finished / totalLength.value) * 100).toFixed(2) - 0
   return val || 0
 })
 const { formData, zipName } = toRefs(props)
@@ -178,10 +186,11 @@ onMounted(async() => {
       name: $t('undefined'),
       size: 0,
       percentage: 0,
+      errorMessage: '',
       type: 'error'
     }
     existing.type = 'error'
-    existing.percentage = message || $t('file_download_failed')
+    existing.errorMessage = message || $t('file_download_failed')
     activeRecords.delete(index)
     recordFailedDisplay(existing)
     refreshActiveDisplay()
@@ -202,6 +211,7 @@ onMounted(async() => {
         name: name || $t('undefined'),
         size,
         percentage,
+        errorMessage: '',
         type: 'loading'
       }
     } else {
@@ -214,6 +224,7 @@ onMounted(async() => {
       existing.percentage = percentage
     }
     existing.type = 'loading'
+    existing.errorMessage = ''
     removeFromFailedDisplay(index)
     failedIds.value.delete(index)
     if (percentage >= 100) {

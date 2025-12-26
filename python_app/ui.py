@@ -89,6 +89,10 @@ class DownloaderDesktopApp:
     self._completion_prompt_shown = False
     self._last_overall_total = 0
     self._last_overall_finished = 0
+    self._history_window: Optional[tk.Toplevel] = None
+    self._history_failed_window: Optional[tk.Toplevel] = None
+    self._history_record_map: Dict[str, Dict[str, object]] = {}
+    self._history_fingerprint: Optional[str] = None
     self._build_widgets()
     self._set_language(self._initial_language_code)
     self._schedule_log_polling()
@@ -148,15 +152,18 @@ class DownloaderDesktopApp:
     self.mode_var = tk.StringVar(value='')
     self.current_var = tk.StringVar(value='0')
     self.completed_var = tk.StringVar(value='0')
+    self.failed_var = tk.StringVar(value='0')
     self.pending_var = tk.StringVar(value='0')
     ttk.Label(self.stats_frame, textvariable=self.connection_var).grid(row=0, column=0, sticky=tk.W, padx=4, pady=4)
-    ttk.Label(self.stats_frame, textvariable=self.mode_var).grid(row=0, column=1, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.mode_var).grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=4, pady=4)
     ttk.Label(self.stats_frame, textvariable=self.current_var).grid(row=1, column=0, sticky=tk.W, padx=4, pady=4)
     ttk.Label(self.stats_frame, textvariable=self.completed_var).grid(row=1, column=1, sticky=tk.W, padx=4, pady=4)
-    ttk.Label(self.stats_frame, textvariable=self.pending_var).grid(row=1, column=2, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.failed_var).grid(row=1, column=2, sticky=tk.W, padx=4, pady=4)
+    ttk.Label(self.stats_frame, textvariable=self.pending_var).grid(row=1, column=3, sticky=tk.W, padx=4, pady=4)
     self.stats_frame.columnconfigure(0, weight=1)
     self.stats_frame.columnconfigure(1, weight=1)
     self.stats_frame.columnconfigure(2, weight=1)
+    self.stats_frame.columnconfigure(3, weight=1)
 
     self.progress_frame = ttk.LabelFrame(main_frame, text='', padding=12)
     self.progress_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
@@ -165,6 +172,14 @@ class DownloaderDesktopApp:
     self.total_progress_label.pack(anchor=tk.W)
     self.total_progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', maximum=100)
     self.total_progress_bar.pack(fill=tk.X, pady=(4, 8))
+    self.failed_only_var = tk.BooleanVar(value=False)
+    self.failed_only_check = ttk.Checkbutton(
+      self.progress_frame,
+      text='',
+      variable=self.failed_only_var,
+      command=self._refresh_stats
+    )
+    self.failed_only_check.pack(anchor=tk.E, pady=(0, 6))
     table_container = ttk.Frame(self.progress_frame)
     table_container.pack(fill=tk.BOTH, expand=True)
     self.file_tree = ttk.Treeview(
@@ -178,6 +193,7 @@ class DownloaderDesktopApp:
     self.file_tree.column('status', anchor=tk.W, width=140)
     self.file_tree.column('progress', anchor=tk.CENTER, width=80)
     self.file_tree.column('path', anchor=tk.W, width=220)
+    self.file_tree.tag_configure('failed', foreground='#d93026')
     self.file_tree_scrollbar = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.file_tree.yview)
     self.file_tree.configure(yscrollcommand=self.file_tree_scrollbar.set)
     self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -228,6 +244,8 @@ class DownloaderDesktopApp:
     self.stop_button.pack(side=tk.RIGHT, padx=4)
     self.open_config_button = ttk.Button(button_frame, text='', command=self._open_config_folder)
     self.open_config_button.pack(side=tk.RIGHT, padx=4)
+    self.history_button = ttk.Button(button_frame, text='', command=self._open_history_page)
+    self.history_button.pack(side=tk.RIGHT, padx=4)
 
     self.log_frame = ttk.LabelFrame(main_frame, text='', padding=8)
     self.log_text = tk.Text(self.log_frame, state=tk.DISABLED, height=12, wrap=tk.NONE)
@@ -375,12 +393,7 @@ class DownloaderDesktopApp:
     """打开当前保存目录。"""
     try:
       target = self._resolve_output_dir()
-      if sys.platform.startswith('win'):
-        os.startfile(target)  # type: ignore[attr-defined]
-      elif sys.platform == 'darwin':
-        subprocess.Popen(['open', str(target)], close_fds=True)
-      else:
-        subprocess.Popen(['xdg-open', str(target)], close_fds=True)
+      self._open_system_path(target)
     except Exception as exc:  # noqa: BLE001
       logging.exception('failed to open output directory')
       messagebox.showerror(self._t('dialog_error_title'), self._t('msg_open_output_failed', error=str(exc)))
@@ -391,15 +404,256 @@ class DownloaderDesktopApp:
       target_dir = CONFIG_FILE.parent
       target_dir.mkdir(parents=True, exist_ok=True)
       CONFIG_FILE.touch(exist_ok=True)
-      if sys.platform.startswith('win'):
-        os.startfile(target_dir)  # type: ignore[attr-defined]
-      elif sys.platform == 'darwin':
-        subprocess.Popen(['open', str(target_dir)], close_fds=True)
-      else:
-        subprocess.Popen(['xdg-open', str(target_dir)], close_fds=True)
+      self._open_system_path(target_dir)
     except Exception as exc:  # noqa: BLE001
       logging.exception('failed to open config folder')
       messagebox.showerror(self._t('dialog_error_title'), self._t('msg_open_config_failed', error=str(exc)))
+
+  def _open_system_path(self, target: Path) -> None:
+    """用系统默认程序打开文件夹或文件。"""
+    if sys.platform.startswith('win'):
+      os.startfile(target)  # type: ignore[attr-defined]
+      return
+    if sys.platform == 'darwin':
+      subprocess.Popen(['open', str(target)], close_fds=True)
+      return
+    subprocess.Popen(['xdg-open', str(target)], close_fds=True)
+
+  def _open_history_page(self) -> None:
+    """打开“下载记录”页面（新窗口），用于展示历史下载任务列表。"""
+    if self._history_window and self._history_window.winfo_exists():
+      self._history_window.deiconify()
+      self._history_window.lift()
+      return
+    self._history_window = tk.Toplevel(self.root)
+    self._history_window.title(self._t('history_window_title'))
+    self._history_window.minsize(860, 360)
+    self._history_window.protocol('WM_DELETE_WINDOW', self._close_history_page)
+    container = ttk.Frame(self._history_window, padding=12)
+    container.pack(fill=tk.BOTH, expand=True)
+
+    table_container = ttk.Frame(container)
+    table_container.pack(fill=tk.BOTH, expand=True)
+
+    self.history_columns = (
+      'startedAt',
+      'finishedAt',
+      'jobName',
+      'mode',
+      'total',
+      'completed',
+      'failed',
+      'status'
+    )
+    self.history_tree = ttk.Treeview(
+      table_container,
+      columns=self.history_columns,
+      show='headings',
+      height=10,
+      selectmode='browse'
+    )
+    self.history_tree_scrollbar = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.history_tree.yview)
+    self.history_tree.configure(yscrollcommand=self.history_tree_scrollbar.set)
+    self.history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    self.history_tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    self.history_tree.tag_configure('failed', foreground='#d93026')
+    self.history_tree.tag_configure('aborted', foreground='#d93026')
+
+    action_frame = ttk.Frame(container, padding=(0, 10, 0, 0))
+    action_frame.pack(fill=tk.X, expand=False)
+    self.history_open_dir_button = ttk.Button(action_frame, text='', command=self._open_selected_history_dir)
+    self.history_open_dir_button.pack(side=tk.LEFT)
+    self.history_failed_files_button = ttk.Button(action_frame, text='', command=self._open_selected_history_failed_files)
+    self.history_failed_files_button.pack(side=tk.LEFT, padx=8)
+    self.history_refresh_button = ttk.Button(action_frame, text='', command=lambda: self._refresh_history_table(force=True))
+    self.history_refresh_button.pack(side=tk.RIGHT)
+
+    self._apply_history_translations()
+    self._refresh_history_table()
+
+  def _close_history_page(self) -> None:
+    """关闭“下载记录”窗口并释放引用。"""
+    if self._history_window and self._history_window.winfo_exists():
+      self._history_window.destroy()
+    self._history_window = None
+    self._history_fingerprint = None
+    self._history_record_map.clear()
+
+  def _apply_history_translations(self) -> None:
+    """刷新“下载记录”窗口的多语言文本。"""
+    if not self._history_window or not self._history_window.winfo_exists():
+      return
+    self._history_window.title(self._t('history_window_title'))
+    self.history_tree.heading('startedAt', text=self._t('history_column_started_at'))
+    self.history_tree.heading('finishedAt', text=self._t('history_column_finished_at'))
+    self.history_tree.heading('jobName', text=self._t('history_column_job_name'))
+    self.history_tree.heading('mode', text=self._t('history_column_mode'))
+    self.history_tree.heading('total', text=self._t('history_column_total'))
+    self.history_tree.heading('completed', text=self._t('history_column_completed'))
+    self.history_tree.heading('failed', text=self._t('history_column_failed'))
+    self.history_tree.heading('status', text=self._t('history_column_status'))
+    self.history_tree.column('startedAt', anchor=tk.W, width=140)
+    self.history_tree.column('finishedAt', anchor=tk.W, width=140)
+    self.history_tree.column('jobName', anchor=tk.W, width=220)
+    self.history_tree.column('mode', anchor=tk.W, width=120)
+    self.history_tree.column('total', anchor=tk.CENTER, width=70)
+    self.history_tree.column('completed', anchor=tk.CENTER, width=70)
+    self.history_tree.column('failed', anchor=tk.CENTER, width=70)
+    self.history_tree.column('status', anchor=tk.W, width=100)
+    self.history_open_dir_button.config(text=self._t('history_btn_open_dir'))
+    self.history_failed_files_button.config(text=self._t('history_btn_failed_files'))
+    self.history_refresh_button.config(text=self._t('history_btn_refresh'))
+
+  def _refresh_history_table(self, *, force: bool = False) -> None:
+    """将历史下载记录渲染到“下载记录”窗口表格中。"""
+    if not self._history_window or not self._history_window.winfo_exists():
+      return
+    snapshot = self.monitor.snapshot()
+    raw_history = snapshot.get('history') or []
+    history: List[Dict[str, object]] = []
+    if isinstance(raw_history, list):
+      for item in raw_history:
+        if isinstance(item, dict):
+          history.append(item)
+
+    fingerprint_parts = []
+    for record in history[:50]:
+      fingerprint_parts.append(
+        f"{record.get('recordKey', '')}|{record.get('status', '')}|{record.get('failed', 0)}|{record.get('finishedAt', '')}"
+      )
+    fingerprint = f"{len(history)}:" + ';'.join(fingerprint_parts)
+    if not force and fingerprint == self._history_fingerprint:
+      return
+    self._history_fingerprint = fingerprint
+
+    selected = self.history_tree.selection()
+    selected_key = selected[0] if selected else None
+    for item in self.history_tree.get_children():
+      self.history_tree.delete(item)
+    self._history_record_map.clear()
+
+    for idx, record in enumerate(history):
+      record_key = str(record.get('recordKey') or record.get('jobId') or record.get('startedAt') or idx)
+      iid = record_key
+      suffix = 1
+      while iid in self._history_record_map:
+        suffix += 1
+        iid = f'{record_key}-{suffix}'
+      self._history_record_map[iid] = record
+      mode_label = self._t('mode_client_token') if record.get('mode') == 'token' else self._t('mode_client')
+      status = str(record.get('status') or '')
+      status_key = 'history_status_completed' if status == 'completed' else 'history_status_aborted'
+      status_label = self._t(status_key)
+      failed_count = int(record.get('failed', 0) or 0)
+      tags = ()
+      if status != 'completed':
+        tags = ('aborted',)
+      elif failed_count > 0:
+        tags = ('failed',)
+      self.history_tree.insert(
+        '',
+        tk.END,
+        iid=iid,
+        values=(
+          record.get('startedAt', ''),
+          record.get('finishedAt', ''),
+          record.get('jobName', ''),
+          mode_label,
+          record.get('total', 0),
+          record.get('completed', 0),
+          record.get('failed', 0),
+          status_label
+        ),
+        tags=tags
+      )
+    if history:
+      self.history_tree.yview_moveto(0.0)
+    if selected_key and selected_key in self._history_record_map:
+      self.history_tree.selection_set(selected_key)
+      self.history_tree.focus(selected_key)
+
+  def _get_selected_history_record(self) -> Optional[Dict[str, object]]:
+    """返回当前在“下载记录”窗口中选中的记录。"""
+    if not self._history_window or not self._history_window.winfo_exists():
+      return None
+    selected = self.history_tree.selection()
+    if not selected:
+      return None
+    return self._history_record_map.get(selected[0])
+
+  def _open_selected_history_dir(self) -> None:
+    """打开当前选中的任务保存目录。"""
+    record = self._get_selected_history_record()
+    if not record:
+      messagebox.showinfo(self._t('dialog_info_title'), self._t('history_select_record_tip'))
+      return
+    job_dir = str(record.get('jobDir') or '')
+    output_dir = str(record.get('outputDir') or '')
+    target_path = job_dir or output_dir
+    if not target_path:
+      messagebox.showinfo(self._t('dialog_info_title'), self._t('history_no_path_tip'))
+      return
+    try:
+      target = Path(target_path).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+      target = Path(target_path)
+    if not target.exists():
+      messagebox.showinfo(
+        self._t('dialog_info_title'),
+        self._t('history_open_dir_not_found', path=str(target))
+      )
+      return
+    try:
+      self._open_system_path(target)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to open history job dir: %s', exc)
+      messagebox.showerror(self._t('dialog_error_title'), str(exc))
+
+  def _open_selected_history_failed_files(self) -> None:
+    """打开当前选中任务的失败文件列表页面（新窗口）。"""
+    record = self._get_selected_history_record()
+    if not record:
+      messagebox.showinfo(self._t('dialog_info_title'), self._t('history_select_record_tip'))
+      return
+    failed_files = record.get('failedFiles') or []
+    if not isinstance(failed_files, list) or not failed_files:
+      messagebox.showinfo(self._t('dialog_info_title'), self._t('history_no_failed_files_tip'))
+      return
+
+    if self._history_failed_window and self._history_failed_window.winfo_exists():
+      self._history_failed_window.destroy()
+    self._history_failed_window = tk.Toplevel(self.root)
+    self._history_failed_window.title(self._t('history_failed_window_title'))
+    self._history_failed_window.minsize(860, 360)
+    container = ttk.Frame(self._history_failed_window, padding=12)
+    container.pack(fill=tk.BOTH, expand=True)
+
+    columns = ('name', 'path', 'error')
+    tree = ttk.Treeview(container, columns=columns, show='headings', height=12, selectmode='browse')
+    scrollbar = ttk.Scrollbar(container, orient=tk.VERTICAL, command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+    tree.heading('name', text=self._t('history_failed_column_name'))
+    tree.heading('path', text=self._t('history_failed_column_path'))
+    tree.heading('error', text=self._t('history_failed_column_error'))
+    tree.column('name', anchor=tk.W, width=260)
+    tree.column('path', anchor=tk.W, width=240)
+    tree.column('error', anchor=tk.W, width=320)
+    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    for idx, entry in enumerate(failed_files):
+      if not isinstance(entry, dict):
+        continue
+      tree.insert(
+        '',
+        tk.END,
+        iid=str(idx),
+        values=(
+          entry.get('name', ''),
+          entry.get('path', ''),
+          entry.get('error', '')
+        )
+      )
 
   def _update_log_visibility(self) -> None:
     """根据状态显示/隐藏日志区。"""
@@ -483,18 +737,24 @@ class DownloaderDesktopApp:
     self.completed_var.set(self._t('stat_completed', count=snapshot['completed']))
     self.pending_var.set(self._t('stat_pending', count=snapshot['pending']))
     overall = snapshot.get('overall') or {}
+    failed = int(overall.get('failed', 0) or 0)
+    self.failed_var.set(self._t('stat_failed', count=failed))
     percent = float(overall.get('percent', 0.0) or 0.0)
     finished = overall.get('finished', 0)
     total = overall.get('total', 0)
     self.total_progress_var.set(self._t('overall_progress', percent=f'{percent:.0f}%', finished=finished, total=total))
     self.total_progress_bar['value'] = percent
     self._refresh_file_table(snapshot.get('files') or [])
+    self._refresh_history_table()
     self._maybe_prompt_job_completion(snapshot)
 
   def _refresh_file_table(self, files: List[Dict[str, object]]) -> None:
     """在表格中渲染单个文件的进度。"""
     limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
-    visible_files = files[-limit:]
+    source_files = files
+    if self.failed_only_var.get():
+      source_files = [entry for entry in files if entry.get('status') == 'failed']
+    visible_files = source_files[-limit:]
     for item in self.file_tree.get_children():
       self.file_tree.delete(item)
     for entry in visible_files:
@@ -505,6 +765,7 @@ class DownloaderDesktopApp:
         status_label = f"{status_label} ({error})"
       progress_value = float(entry.get('percent', 0.0) or 0.0)
       progress_text = f"{progress_value:.0f}%"
+      tags = ('failed',) if entry.get('status') == 'failed' else ()
       self.file_tree.insert(
         '',
         tk.END,
@@ -514,7 +775,8 @@ class DownloaderDesktopApp:
           status_label,
           progress_text,
           entry.get('path', '')
-        )
+        ),
+        tags=tags
       )
     if visible_files:
       self.file_tree.yview_moveto(1.0)
@@ -643,17 +905,20 @@ class DownloaderDesktopApp:
     self.stop_button.config(text=self._t('btn_stop'))
     self.open_output_button.config(text=self._t('btn_open_output_dir'))
     self.open_config_button.config(text=self._t('btn_open_config'))
+    self.history_button.config(text=self._t('btn_open_history'))
     self.log_frame.config(text=self._t('logs'))
     self.advanced_frame.config(text=self._t('advanced_settings'))
     self.advanced_tip.config(text=self._t('advanced_settings_desc'))
     self.personal_token_label.config(text=self._t('personal_token') + ':')
     self.personal_token_hint.config(text=self._t('personal_token_hint'))
     self.progress_frame.config(text=self._t('files_title'))
+    self.failed_only_check.config(text=self._t('filter_failed_only'))
     self.file_limit_label.config(text=self._t('file_limit_label') + ':')
     self.file_tree.heading('name', text=self._t('file_column_name'))
     self.file_tree.heading('status', text=self._t('file_column_status'))
     self.file_tree.heading('progress', text=self._t('file_column_progress'))
     self.file_tree.heading('path', text=self._t('file_column_path'))
+    self._apply_history_translations()
     self._update_advanced_visibility()
     self._update_log_visibility()
     self._refresh_stats()

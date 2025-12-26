@@ -359,8 +359,6 @@ class FileDownloader {
    * 处理单个文件，获取内容并写入当前 Zip。
    */
   async processFile(fileInfo) {
-    await this.getAttachmentUrl(fileInfo)
-
     const blob = await this.downloadFile(fileInfo)
 
     if (blob) {
@@ -386,7 +384,6 @@ class FileDownloader {
     await this.runWithConcurrency(
       cellList,
       async(fileInfo) => {
-        await this.getAttachmentUrl(fileInfo)
         await downLocal(fileInfo)
       }
     )
@@ -706,8 +703,6 @@ class FileDownloader {
                 index: order,
                 message: data.message || $t('file_download_failed')
               })
-              notifyFatal(data.message || $t('file_download_failed'))
-              finish(new Error(data.message || $t('file_download_failed')))
             }
             return
           }
@@ -770,51 +765,88 @@ class FileDownloader {
   }
 
   /**
-   * 下载单个文件并上报进度。
+   * 下载单个文件并上报进度（包含重试兜底，避免临时链接失效或网络抖动导致失败）。
    */
   async downloadFile(fileInfo) {
-    const { fileUrl, name, order, size } = fileInfo
-    let isDownloadComplete = false // 新增变量，用于跟踪下载是否完成
+    const { name, order, size } = fileInfo
+    const maxAttempts = 3
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    const shouldRefreshUrl = (status) => {
+      const code = Number(status)
+      return [400, 401, 403, 404, 410].includes(code)
+    }
+
     this.emit('progress', {
       index: order,
       name,
       size,
       percentage: 0
     })
-    const [err, response] = await to(
-      axios({
-        method: 'get',
-        responseType: 'blob',
-        url: fileUrl,
-        onDownloadProgress: (progressEvent) => {
-          if (progressEvent.lengthComputable && !isDownloadComplete) {
-            const percentage = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
-            )
-            this.emit('progress', {
-              index: order,
-              percentage
-            })
-          }
-        }
-      })
-    )
-    if (!isDownloadComplete) {
-      this.emit('progress', {
-        index: order,
 
-        percentage: 100
-      })
-      isDownloadComplete = true // 标记下载完成
-    }
-    if (err) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.getAttachmentUrl(fileInfo)
+      } catch (error) {
+        if (shouldRefreshUrl(error?.response?.status)) {
+          fileInfo.fileUrl = null
+        }
+        if (attempt < maxAttempts) {
+          await sleep(300 * attempt)
+          continue
+        }
+        this.emit('error', {
+          message: error?.message || $t('file_download_failed'),
+          index: order
+        })
+        return null
+      }
+
+      let completed = false
+      const [err, response] = await to(
+        axios({
+          method: 'get',
+          responseType: 'blob',
+          url: fileInfo.fileUrl,
+          onDownloadProgress: (progressEvent) => {
+            if (completed) return
+            if (progressEvent.lengthComputable && progressEvent.total > 0) {
+              const percentage = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              )
+              // 避免提前上报 100% 导致 UI 误判“已完成”。
+              const safePercentage = Math.min(Math.max(percentage, 0), 99)
+              this.emit('progress', {
+                index: order,
+                percentage: safePercentage
+              })
+            }
+          }
+        })
+      )
+      completed = true
+
+      if (!err) {
+        this.emit('progress', {
+          index: order,
+          percentage: 100
+        })
+        return response.data
+      }
+
+      if (shouldRefreshUrl(err?.response?.status)) {
+        fileInfo.fileUrl = null
+      }
+      if (attempt < maxAttempts) {
+        await sleep(300 * attempt)
+        continue
+      }
       this.emit('error', {
-        message: err.message,
+        message: err?.message || $t('file_download_failed'),
         index: order
       })
       return null
     }
-    return response.data
+    return null
   }
 
   /**

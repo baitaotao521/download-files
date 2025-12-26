@@ -1,9 +1,19 @@
 """线程安全的下载状态监控，供桌面端轮询展示。"""
 from __future__ import annotations
 
+import json
+import logging
+import time
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from .user_config import CONFIG_DIR
+
+HISTORY_FILE = CONFIG_DIR / 'download_history.json'
+MAX_HISTORY_RECORDS = 200
+FAILED_FILES_PREVIEW_LIMIT = 200
 
 
 @dataclass
@@ -53,6 +63,127 @@ class DownloadMonitor:
   _mode: str = 'url'
   _files: Dict[str, FileProgress] = field(default_factory=dict, init=False, repr=False)
   _file_order: List[str] = field(default_factory=list, init=False, repr=False)
+  _history: List[Dict[str, object]] = field(default_factory=list, init=False, repr=False)
+  _current_job: Optional[Dict[str, object]] = field(default=None, init=False, repr=False)
+
+  def __post_init__(self) -> None:
+    """在实例创建后加载历史记录，避免 GUI 启动时阻塞太久。"""
+    self._load_history()
+
+  def _load_history(self) -> None:
+    """从磁盘读取下载记录，读取失败时回退为空列表。"""
+    try:
+      raw = HISTORY_FILE.read_text(encoding='utf-8')
+      data = json.loads(raw)
+    except FileNotFoundError:
+      return
+    except Exception as exc:  # noqa: BLE001
+      logging.debug('failed to load download history: %s', exc)
+      return
+    if not isinstance(data, list):
+      return
+    normalized: List[Dict[str, object]] = []
+    for item in data[:MAX_HISTORY_RECORDS]:
+      if isinstance(item, dict):
+        normalized.append(dict(item))
+    with self._lock:
+      self._history = normalized
+
+  def _save_history(self) -> None:
+    """将当前历史记录写回磁盘，失败时忽略（不会影响下载流程）。"""
+    try:
+      HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+      payload = self._history[:MAX_HISTORY_RECORDS]
+      HISTORY_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception as exc:  # noqa: BLE001
+      logging.debug('failed to save download history: %s', exc)
+
+  def _format_timestamp(self, value: float) -> str:
+    """将时间戳格式化为可读字符串。"""
+    try:
+      return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(value))
+    except Exception:  # noqa: BLE001
+      return ''
+
+  def start_job(
+    self,
+    total: int,
+    *,
+    job_id: str = '',
+    job_name: str = '',
+    mode: str = 'url',
+    output_dir: Optional[Path] = None,
+    job_dir: Optional[Path] = None,
+    zip_after: bool = False
+  ) -> None:
+    """当收到新的 Job 配置时重置统计，并记录任务元信息供“下载记录”展示。"""
+    normalized_mode = mode if mode in ('url', 'token') else 'url'
+    started_at = self._format_timestamp(time.time())
+    record_key_source = str(job_id or int(time.time() * 1000))
+    with self._lock:
+      self._total = max(int(total or 0), 0)
+      self._completed = 0
+      self._active = 0
+      self._mode = normalized_mode
+      self._files.clear()
+      self._file_order.clear()
+      self._current_job = {
+        'recordKey': f'job-{record_key_source}',
+        'jobId': str(job_id or ''),
+        'jobName': str(job_name or ''),
+        'mode': normalized_mode,
+        'zipAfter': bool(zip_after),
+        'outputDir': str(output_dir or ''),
+        'jobDir': str(job_dir or ''),
+        'zipPath': None,
+        'status': 'running',
+        'startedAt': started_at,
+        'finishedAt': '',
+        'total': 0,
+        'completed': 0,
+        'failed': 0,
+        'failedFiles': []
+      }
+
+  def set_job_zip_path(self, zip_path: Path) -> None:
+    """记录当前任务生成的 ZIP 文件路径，供记录页面展示与快速打开。"""
+    with self._lock:
+      if not self._current_job:
+        return
+      self._current_job['zipPath'] = str(zip_path)
+
+  def finish_job(self, *, aborted: bool = False) -> None:
+    """在任务整体结束时生成一条下载记录，并写入历史列表。"""
+    finished_at = self._format_timestamp(time.time())
+    with self._lock:
+      self._active = 0
+      if not self._current_job:
+        return
+      if self._current_job.get('status') in ('completed', 'aborted'):
+        return
+      total_files = max(self._total, len(self._files))
+      completed_files = sum(1 for entry in self._files.values() if entry.status == 'completed')
+      failed_files = sum(1 for entry in self._files.values() if entry.status == 'failed')
+      failed_details = [
+        entry.as_dict()
+        for entry in self._files.values()
+        if entry.status == 'failed'
+      ]
+      self._current_job['total'] = total_files
+      self._current_job['completed'] = completed_files
+      self._current_job['failed'] = failed_files
+      self._current_job['failedFiles'] = failed_details[:FAILED_FILES_PREVIEW_LIMIT]
+      self._current_job['finishedAt'] = finished_at
+      finished_count = completed_files + failed_files
+      status = 'aborted' if aborted and finished_count < total_files else 'completed'
+      self._current_job['status'] = status
+      record = dict(self._current_job)
+      if not record.get('recordKey'):
+        record['recordKey'] = f"job-{record.get('jobId') or int(time.time() * 1000)}"
+      self._history.insert(0, record)
+      self._history = self._history[:MAX_HISTORY_RECORDS]
+      self._current_job = None
+    self._save_history()
 
   def set_connection(self, connected: bool) -> None:
     """记录当前是否有前端连接。"""
@@ -65,6 +196,7 @@ class DownloadMonitor:
         self._mode = 'url'
         self._files.clear()
         self._file_order.clear()
+        self._current_job = None
 
   def set_mode(self, mode: str) -> None:
     """记录当前下载模式（url / token）。"""
@@ -72,14 +204,9 @@ class DownloadMonitor:
     with self._lock:
       self._mode = normalized
 
-  def start_job(self, total: int) -> None:
-    """当收到新的 Job 配置时重置统计。"""
-    with self._lock:
-      self._total = max(int(total or 0), 0)
-      self._completed = 0
-      self._active = 0
-      self._files.clear()
-      self._file_order.clear()
+  def job_finished(self, aborted: bool = False) -> None:
+    """任务整体结束，兼容旧接口：记录历史并重置活动数。"""
+    self.finish_job(aborted=aborted)
 
   def register_file(self, key: str, name: str, path: str, size: int) -> None:
     """登记一个待下载文件，方便 UI 展示。"""
@@ -127,20 +254,15 @@ class DownloadMonitor:
       if success:
         self._completed += 1
 
-  def job_finished(self) -> None:
-    """任务整体结束，重置活动数。"""
-    with self._lock:
-      self._active = 0
-
   def snapshot(self) -> Dict[str, object]:
     """生成当前统计的浅拷贝，供 UI 渲染。"""
     with self._lock:
-      pending = max(self._total - self._completed, 0)
       files = [self._files[key].as_dict() for key in self._file_order]
       total_files = max(self._total, len(files))
       completed_files = sum(1 for entry in self._files.values() if entry.status == 'completed')
       finished_files = sum(1 for entry in self._files.values() if entry.status in ('completed', 'failed'))
       failed_files = sum(1 for entry in self._files.values() if entry.status == 'failed')
+      pending = max(total_files - finished_files, 0)
       overall_percent = (finished_files / total_files * 100) if total_files else 0.0
       return {
         'connected': self._connected,
@@ -150,6 +272,7 @@ class DownloadMonitor:
         'pending': pending,
         'mode': self._mode,
         'files': files,
+        'history': list(self._history),
         'overall': {
           'total': total_files,
           'completed': completed_files,

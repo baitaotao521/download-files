@@ -135,6 +135,28 @@ class DownloadJobState:
       return parsed
     return fallback
 
+  def _is_refreshable_download_status(self, status: int) -> bool:
+    """判断 HTTP 状态码是否可能由临时链接失效触发，从而需要向前端刷新 downloadUrl。"""
+    return status in (400, 401, 403, 404, 410)
+
+  def _parse_retry_after_seconds(self, value: Optional[str]) -> Optional[float]:
+    """解析 Retry-After 秒数，非法或缺失时返回 None。"""
+    if not value:
+      return None
+    try:
+      seconds = float(value)
+    except (TypeError, ValueError):
+      return None
+    return seconds if seconds > 0 else None
+
+  def _calculate_retry_delay_seconds(self, attempt: int, *, retry_after: Optional[str] = None) -> float:
+    """根据当前失败次数计算下一次重试等待时间，优先使用 Retry-After。"""
+    header_delay = self._parse_retry_after_seconds(retry_after)
+    if header_delay is not None:
+      return min(header_delay, 30.0)
+    # 指数退避：0.5s / 1s / 2s ... 最多 5s
+    return min(0.5 * (2 ** max(attempt - 1, 0)), 5.0)
+
   async def configure(self, data: Dict[str, Any], websocket) -> bool:
     """应用前端传来的配置，若缺失则通知前端并阻止下载。"""
     if self.configured:
@@ -170,7 +192,14 @@ class DownloadJobState:
       return False
     if self.download_mode == 'token':
       self.semaphore = asyncio.Semaphore(concurrent)
-    self.handler._monitor_job_started(self.total)
+    self.handler._monitor_job_started(
+      self.total,
+      job_id=self.job_id,
+      job_name=self.job_name,
+      job_dir=self.job_dir,
+      zip_after=self.zip_after,
+      mode=self.download_mode
+    )
     await self.handler._send_ack(
       websocket,
       status='success',
@@ -237,6 +266,7 @@ class DownloadJobState:
       await asyncio.gather(*self.tasks, return_exceptions=True)
     if self.zip_after and self.job_dir:
       zip_path = await asyncio.to_thread(self._create_zip_archive, self.job_dir)
+      self.handler._monitor_job_zip_path(zip_path)
       await self.handler._send_ack(
         websocket,
         status='success',
@@ -252,7 +282,7 @@ class DownloadJobState:
       extra={'stage': 'job_complete', 'jobId': self.job_id}
     )
     self.completed = True
-    self.handler._monitor_job_finished()
+    self.handler._monitor_job_finished(aborted=False)
 
   def schedule_finalize(self, websocket) -> None:
     """后台触发 finalize，避免阻塞 WebSocket 收消息（refresh 链接需要继续接收）。"""
@@ -280,14 +310,14 @@ class DownloadJobState:
       if not waiter.done():
         waiter.cancel()
     if not self.tasks:
-      self.handler._monitor_job_finished()
+      self.handler._monitor_job_finished(aborted=not self.completed)
       return
     tasks = list(self.tasks)
     self.tasks.clear()
     for task in tasks:
       task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
-    self.handler._monitor_job_finished()
+    self.handler._monitor_job_finished(aborted=not self.completed)
     self.sdk_client = None
 
   async def _download_worker(self, file_info: Dict[str, Any], websocket) -> None:
@@ -354,7 +384,8 @@ class DownloadJobState:
     self.handler._monitor_download_started()
     self.handler._monitor_file_status(file_key, 'downloading')
 
-    for attempt in range(1, 4):
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
       try:
         target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
         if self.download_mode == 'token':
@@ -387,7 +418,10 @@ class DownloadJobState:
         last_error = str(exc)
         break
       except aiohttp.ClientResponseError as exc:
-        if self.download_mode == 'url' and exc.status == 400:
+        retry_after_header = None
+        if getattr(exc, 'headers', None):
+          retry_after_header = exc.headers.get('Retry-After')  # type: ignore[union-attr]
+        if self.download_mode == 'url' and self._is_refreshable_download_status(exc.status):
           try:
             download_url = await self.request_download_url_refresh(
               websocket,
@@ -398,21 +432,26 @@ class DownloadJobState:
             continue
           except Exception as refresh_exc:  # noqa: BLE001
             last_error = self.handler._format_download_exception(refresh_exc)
-            logging.exception('failed to refresh download url for %s (attempt %s/3)', file_name, attempt)
-            if attempt < 3:
-              await asyncio.sleep(0.5)
+            logging.exception(
+              'failed to refresh download url for %s (attempt %s/%s)',
+              file_name,
+              attempt,
+              max_attempts
+            )
+            if attempt < max_attempts:
+              await asyncio.sleep(self._calculate_retry_delay_seconds(attempt))
               continue
             break
         last_error = self.handler._format_download_exception(exc)
-        logging.exception('download failed for %s (attempt %s/3)', file_name, attempt)
-        if attempt < 3:
-          await asyncio.sleep(0.5)
+        logging.exception('download failed for %s (attempt %s/%s)', file_name, attempt, max_attempts)
+        if attempt < max_attempts:
+          await asyncio.sleep(self._calculate_retry_delay_seconds(attempt, retry_after=retry_after_header))
           continue
       except Exception as exc:  # noqa: BLE001
         last_error = self.handler._format_download_exception(exc)
-        logging.exception('download failed for %s (attempt %s/3)', file_name, attempt)
-        if attempt < 3:
-          await asyncio.sleep(0.5)
+        logging.exception('download failed for %s (attempt %s/%s)', file_name, attempt, max_attempts)
+        if attempt < max_attempts:
+          await asyncio.sleep(self._calculate_retry_delay_seconds(attempt))
           continue
 
     self.handler._monitor_download_finished(success=success)
@@ -421,8 +460,15 @@ class DownloadJobState:
       await self.handler._send_ack(
         websocket,
         status='error',
-        message=f'download failed after 3 attempts: {last_error or "download failed"}',
-        order=order
+        message=f'download failed after {max_attempts} attempts: {last_error or "download failed"}',
+        order=order,
+        extra={
+          'stage': 'file',
+          'name': file_name,
+          'path': str(relative_path or ''),
+          'fileKey': file_key,
+          'attempts': max_attempts
+        }
       )
       return
 
@@ -832,10 +878,27 @@ class AttachmentDownloader:
     if self.monitor:
       self.monitor.set_connection(connected)
 
-  def _monitor_job_started(self, total: int) -> None:
-    """记录新的下载任务。"""
+  def _monitor_job_started(
+    self,
+    total: int,
+    *,
+    job_id: Optional[str] = None,
+    job_name: Optional[str] = None,
+    job_dir: Optional[Path] = None,
+    zip_after: bool = False,
+    mode: Optional[str] = None
+  ) -> None:
+    """记录新的下载任务，供桌面端“下载记录”页面展示。"""
     if self.monitor:
-      self.monitor.start_job(total)
+      self.monitor.start_job(
+        total,
+        job_id=str(job_id or ''),
+        job_name=str(job_name or ''),
+        mode=str(mode or 'url'),
+        output_dir=self.output_dir,
+        job_dir=job_dir,
+        zip_after=zip_after
+      )
 
   def _monitor_download_started(self) -> None:
     """记录单个文件开始下载。"""
@@ -847,10 +910,15 @@ class AttachmentDownloader:
     if self.monitor:
       self.monitor.finish_download(success)
 
-  def _monitor_job_finished(self) -> None:
-    """通知任务阶段结束。"""
+  def _monitor_job_zip_path(self, zip_path: Path) -> None:
+    """记录任务生成的 ZIP 文件路径。"""
     if self.monitor:
-      self.monitor.job_finished()
+      self.monitor.set_job_zip_path(zip_path)
+
+  def _monitor_job_finished(self, *, aborted: bool = False) -> None:
+    """通知任务阶段结束，并将当前任务写入下载记录。"""
+    if self.monitor:
+      self.monitor.job_finished(aborted=aborted)
 
   def _monitor_download_mode(self, mode: str) -> None:
     """记录下载模式供桌面端展示。"""
