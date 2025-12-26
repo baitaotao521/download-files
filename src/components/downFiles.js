@@ -26,38 +26,6 @@ const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
 const WEBSOCKET_REFRESH_TYPE = 'feishu_attachment_refresh'
 const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
 
-class TokenDispatcher {
-  /**
-   * 控制鉴权码推送速率，可配置 1 秒内推送的条数。
-   */
-  constructor(limit = 50, windowMs = 1000) {
-    this.limit = limit
-    this.windowMs = windowMs
-    this.timeline = []
-  }
-
-  /**
-   * 获取一个可发送鉴权码的时间窗口，必要时等待。
-   */
-  async acquire(shouldAbort) {
-    let acquired = false
-    while (!acquired) {
-      if (typeof shouldAbort === 'function' && shouldAbort()) {
-        return
-      }
-      const now = Date.now()
-      this.timeline = this.timeline.filter((timestamp) => now - timestamp < this.windowMs)
-      if (this.timeline.length < this.limit) {
-        this.timeline.push(now)
-        acquired = true
-      } else {
-        const waitTime = this.windowMs - (now - this.timeline[0])
-        await new Promise((resolve) => setTimeout(resolve, Math.max(waitTime, 0)))
-      }
-    }
-  }
-}
-
 class FileDownloader {
   /**
    * 基于表单配置初始化下载器。
@@ -72,8 +40,6 @@ class FileDownloader {
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
-    const pushLimit = Number(this.tokenPushBatchSize) || 50
-    this.tokenDispatcher = new TokenDispatcher(pushLimit)
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
@@ -428,67 +394,69 @@ class FileDownloader {
         this.emit('warn', message)
       }
     }
-    const completion = this._bindWebSocketLifecycle(socket, {
-      onFatalError: stopAllDownloads,
-      onRefreshUrl: (() => {
-        const fileInfoByOrder = new Map(
-          (this.cellList || []).map((item) => [Number(item?.order), item])
-        )
-        const inflight = new Map()
-        const maxConcurrent = Number.POSITIVE_INFINITY
-        let active = 0
-        const waitQueue = []
-        const acquireSlot = async() => {
-          if (active < maxConcurrent) {
-            active += 1
-            return
-          }
-          await new Promise((resolve) => waitQueue.push(resolve))
-          active += 1
-        }
-        const releaseSlot = () => {
-          active = Math.max(active - 1, 0)
-          const next = waitQueue.shift()
-          if (typeof next === 'function') {
-            next()
-          }
-        }
-        return async(order) => {
-          if (inflight.has(order)) {
-            return inflight.get(order)
-          }
-          const task = (async() => {
-            const fileInfo = fileInfoByOrder.get(order)
-            if (!fileInfo) {
-              throw new Error($t('file_download_failed'))
-            }
-            await acquireSlot()
-            try {
-              // refresh 场景必须强制重新拉取临时链接（旧链接 10 分钟后会失效）。
-              fileInfo.fileUrl = null
-              const url = await this.getAttachmentUrl(fileInfo)
-              if (!url) {
-                throw new Error($t('file_download_failed'))
-              }
-              return url
-            } finally {
-              releaseSlot()
-            }
-          })()
-          inflight.set(order, task)
-          try {
-            return await task
-          } finally {
-            inflight.delete(order)
-          }
-        }
-      })()
-    })
     const jobId = `${Date.now()}`
     const useTokenMode = this.isTokenWebSocketChannel()
     if (useTokenMode && !this.appToken) {
       throw new Error($t('error_app_token_missing'))
     }
+    const completion = useTokenMode
+      ? Promise.resolve()
+      : this._bindWebSocketLifecycle(socket, {
+        onFatalError: stopAllDownloads,
+        onRefreshUrl: (() => {
+          const fileInfoByOrder = new Map(
+            (this.cellList || []).map((item) => [Number(item?.order), item])
+          )
+          const inflight = new Map()
+          const maxConcurrent = Number.POSITIVE_INFINITY
+          let active = 0
+          const waitQueue = []
+          const acquireSlot = async() => {
+            if (active < maxConcurrent) {
+              active += 1
+              return
+            }
+            await new Promise((resolve) => waitQueue.push(resolve))
+            active += 1
+          }
+          const releaseSlot = () => {
+            active = Math.max(active - 1, 0)
+            const next = waitQueue.shift()
+            if (typeof next === 'function') {
+              next()
+            }
+          }
+          return async(order) => {
+            if (inflight.has(order)) {
+              return inflight.get(order)
+            }
+            const task = (async() => {
+              const fileInfo = fileInfoByOrder.get(order)
+              if (!fileInfo) {
+                throw new Error($t('file_download_failed'))
+              }
+              await acquireSlot()
+              try {
+                // refresh 场景必须强制重新拉取临时链接（旧链接 10 分钟后会失效）。
+                fileInfo.fileUrl = null
+                const url = await this.getAttachmentUrl(fileInfo)
+                if (!url) {
+                  throw new Error($t('file_download_failed'))
+                }
+                return url
+              } finally {
+                releaseSlot()
+              }
+            })()
+            inflight.set(order, task)
+            try {
+              return await task
+            } finally {
+              inflight.delete(order)
+            }
+          }
+        })()
+      })
     try {
       this._sendWebSocketMessage(socket, {
         type: WEBSOCKET_CONFIG_TYPE,
@@ -508,6 +476,29 @@ class FileDownloader {
             : {})
         }
       })
+      if (useTokenMode) {
+        await this._pushTokenFilesInBatches(socket, {
+          sleep,
+          drainSocketBuffer,
+          shouldAbort: () => abortDownloads
+        })
+        if (abortDownloads) {
+          return
+        }
+        this.emit('zip_progress', {
+          message: $t('token_push_waiting_message')
+        })
+        this._sendWebSocketMessage(socket, {
+          type: WEBSOCKET_COMPLETE_TYPE,
+          data: {
+            jobId
+          }
+        })
+        await drainSocketBuffer()
+        await sleep(0)
+        return
+      }
+
       let sentCount = 0
       for (const fileInfo of this.cellList) {
         if (abortDownloads) break
@@ -525,17 +516,10 @@ class FileDownloader {
             name: fileInfo.name,
             path: fileInfo.path,
             order: fileInfo.order,
-            size: fileInfo.size
-          }
-          if (useTokenMode) {
-            payload.token = fileInfo.token
-            payload.fieldId = fileInfo.fieldId
-            payload.recordId = fileInfo.recordId
-            await this._acquireTokenModeSlot(() => abortDownloads)
-          } else {
-            payload.token = fileInfo.token
-            payload.fieldId = fileInfo.fieldId
-            payload.recordId = fileInfo.recordId
+            size: fileInfo.size,
+            token: fileInfo.token,
+            fieldId: fileInfo.fieldId,
+            recordId: fileInfo.recordId
           }
           if (abortDownloads) break
           this._sendWebSocketMessage(socket, {
@@ -543,12 +527,10 @@ class FileDownloader {
             data: payload
           })
           sentCount += 1
-          if (!useTokenMode) {
-            if (sentCount % 50 === 0) {
-              await sleep(0)
-            }
-            await drainSocketBuffer()
+          if (sentCount % 50 === 0) {
+            await sleep(0)
           }
+          await drainSocketBuffer()
         } catch (error) {
           const message = error?.message || $t('file_download_failed')
           this.emit('error', {
@@ -558,11 +540,7 @@ class FileDownloader {
           stopAllDownloads(error)
         }
       }
-      if (!abortDownloads && useTokenMode) {
-        this.emit('zip_progress', {
-          message: $t('token_push_waiting_message')
-        })
-      }
+
       if (!abortDownloads) {
         this._sendWebSocketMessage(socket, {
           type: WEBSOCKET_COMPLETE_TYPE,
@@ -578,6 +556,59 @@ class FileDownloader {
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close()
       }
+    }
+  }
+
+  /**
+   * 授权码模式：按批次将附件标识推送给桌面端，推送完成后即可关闭前端。
+   */
+  async _pushTokenFilesInBatches(socket, { sleep, drainSocketBuffer, shouldAbort }) {
+    const tokenBatchSize = Math.max(1, Math.min(Number(this.tokenPushBatchSize) || 50, 10000))
+    let batch = []
+
+    const flush = async() => {
+      if (!batch.length) {
+        return
+      }
+      this._sendWebSocketMessage(socket, {
+        type: WEBSOCKET_LINK_TYPE,
+        data: {
+          files: batch
+        }
+      })
+      batch = []
+      await drainSocketBuffer()
+      await sleep(0)
+    }
+
+    for (const fileInfo of this.cellList) {
+      if (typeof shouldAbort === 'function' && shouldAbort()) {
+        break
+      }
+      const { order } = fileInfo
+      this._prepareUniqueFileName(fileInfo)
+      this.emit('progress', {
+        index: order,
+        name: fileInfo.name,
+        size: fileInfo.size,
+        percentage: 0
+      })
+      batch.push({
+        name: fileInfo.name,
+        path: fileInfo.path,
+        order: fileInfo.order,
+        size: fileInfo.size,
+        token: fileInfo.token,
+        fieldId: fileInfo.fieldId,
+        recordId: fileInfo.recordId
+      })
+      if (batch.length >= tokenBatchSize) {
+        await flush()
+      }
+    }
+
+    if (!(typeof shouldAbort === 'function' && shouldAbort())) {
+      await flush()
     }
   }
   /**
@@ -755,13 +786,6 @@ class FileDownloader {
       throw new Error($t('websocket_connection_failed'))
     }
     socket.send(JSON.stringify(payload))
-  }
-
-  /**
-   * 控制鉴权码推送频率，使用限流器保证 1 秒最多 5 次。
-   */
-  async _acquireTokenModeSlot(shouldAbort) {
-    await this.tokenDispatcher.acquire(shouldAbort)
   }
 
   /**

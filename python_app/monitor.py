@@ -189,7 +189,11 @@ class DownloadMonitor:
     """记录当前是否有前端连接。"""
     with self._lock:
       self._connected = connected
-      if not connected:
+      current_status = None
+      if isinstance(self._current_job, dict):
+        current_status = self._current_job.get('status')
+      # 授权码模式允许前端断开后继续下载：连接断开时若仍有运行中的任务，则保留状态供桌面端展示。
+      if not connected and current_status != 'running':
         self._total = 0
         self._completed = 0
         self._active = 0

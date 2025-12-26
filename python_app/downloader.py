@@ -60,6 +60,7 @@ class DownloadJobState:
     self.app_token: Optional[str] = None
     self.table_id: Optional[str] = None
     self.sdk_client: Any = None
+    self._completion_requested = False
     self._download_url_refresh_waiters: Dict[str, asyncio.Future[str]] = {}
     self._download_url_refresh_cache: Dict[str, str] = {}
     self._download_url_refresh_semaphore = asyncio.Semaphore(DOWNLOAD_URL_REFRESH_MAX_INFLIGHT)
@@ -156,6 +157,19 @@ class DownloadJobState:
       return min(header_delay, 30.0)
     # 指数退避：0.5s / 1s / 2s ... 最多 5s
     return min(0.5 * (2 ** max(attempt - 1, 0)), 5.0)
+
+  def mark_completion_requested(self) -> None:
+    """标记前端已发送“任务完成推送”的消息，用于断连兜底时区分是否需要标记为 aborted。"""
+    self._completion_requested = True
+
+  def should_detach_on_disconnect(self, websocket) -> bool:
+    """判断当前任务是否允许在 WebSocket 断开后继续执行（授权码模式可离线下载）。"""
+    return bool(
+      websocket is not None
+      and self.download_mode == 'token'
+      and self.configured
+      and not self.completed
+    )
 
   async def configure(self, data: Dict[str, Any], websocket) -> bool:
     """应用前端传来的配置，若缺失则通知前端并阻止下载。"""
@@ -258,7 +272,7 @@ class DownloadJobState:
     self.tasks.add(task)
     task.add_done_callback(lambda fut: self.tasks.discard(fut))
 
-  async def finalize(self, websocket) -> None:
+  async def finalize(self, websocket, *, aborted: bool = False) -> None:
     """等待所有下载完成，并根据配置执行打包。"""
     if self.completed:
       return
@@ -282,33 +296,41 @@ class DownloadJobState:
       extra={'stage': 'job_complete', 'jobId': self.job_id}
     )
     self.completed = True
-    self.handler._monitor_job_finished(aborted=False)
+    self.sdk_client = None
+    self.handler._monitor_job_finished(aborted=aborted)
 
-  def schedule_finalize(self, websocket) -> None:
+  def schedule_finalize(self, websocket, *, aborted: bool = False) -> None:
     """后台触发 finalize，避免阻塞 WebSocket 收消息（refresh 链接需要继续接收）。"""
     if self._finalize_task and not self._finalize_task.done():
       return
 
     async def _run_finalize() -> None:
       try:
-        await self.finalize(websocket)
+        await self.finalize(websocket, aborted=aborted)
       except Exception:  # noqa: BLE001
         logging.exception('finalize task failed')
 
     self._finalize_task = asyncio.create_task(_run_finalize())
 
-  async def shutdown(self) -> None:
+  async def shutdown(self, websocket=None) -> None:
     """在连接异常结束时取消挂起任务。"""
-    if self._finalize_task and not self._finalize_task.done():
-      self._finalize_task.cancel()
-      await asyncio.gather(self._finalize_task, return_exceptions=True)
-    self._finalize_task = None
+    if self.should_detach_on_disconnect(websocket):
+      # 授权码模式允许前端断开：保持任务继续运行，并在需要时自动 finalize。
+      if not self._finalize_task or self._finalize_task.done():
+        self.schedule_finalize(websocket, aborted=not self._completion_requested)
+    else:
+      if self._finalize_task and not self._finalize_task.done():
+        self._finalize_task.cancel()
+        await asyncio.gather(self._finalize_task, return_exceptions=True)
+      self._finalize_task = None
     waiters = list(self._download_url_refresh_waiters.values())
     self._download_url_refresh_waiters.clear()
     self._download_url_refresh_cache.clear()
     for waiter in waiters:
       if not waiter.done():
         waiter.cancel()
+    if self.should_detach_on_disconnect(websocket):
+      return
     if not self.tasks:
       self.handler._monitor_job_finished(aborted=not self.completed)
       return
@@ -564,7 +586,7 @@ class AttachmentDownloader:
       except websockets.ConnectionClosedError as exc:
         logging.warning('connection closed with error: %s', exc)
       finally:
-        await job_state.shutdown()
+        await job_state.shutdown(websocket)
         self._monitor_connection(False)
 
   async def _process_message(self, message: str, websocket, job_state: DownloadJobState) -> None:
@@ -592,13 +614,27 @@ class AttachmentDownloader:
       await job_state.configure(data, websocket)
       return
     if msg_type == WEBSOCKET_LINK_TYPE:
+      files_payload = None
+      if isinstance(data, dict):
+        files_payload = data.get('files')
+      if isinstance(files_payload, list):
+        for item in files_payload:
+          if isinstance(item, dict):
+            await job_state.enqueue_download(item, websocket)
+        return
+      if isinstance(data, list):
+        for item in data:
+          if isinstance(item, dict):
+            await job_state.enqueue_download(item, websocket)
+        return
       await job_state.enqueue_download(data, websocket)
       return
     if msg_type == WEBSOCKET_REFRESH_TYPE:
       job_state.provide_download_url_refresh(data)
       return
     if msg_type == WEBSOCKET_COMPLETE_TYPE:
-      job_state.schedule_finalize(websocket)
+      job_state.mark_completion_requested()
+      job_state.schedule_finalize(websocket, aborted=False)
       return
 
     logging.debug('skip unknown message type=%s', msg_type)
