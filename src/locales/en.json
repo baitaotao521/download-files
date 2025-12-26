@@ -1,12 +1,5 @@
 {
   "usage_instructions": "Usage Instructions",
-  "notice_1": "It is recommended to use Chrome browser to download, as downloading from other browsers may encounter some abnormal issues",
-  "notice_2": "Call the browser's native download function. If the browser prompts to download multiple files, please select 'Allow'",
-  "notice_3": "To download attachments, ensure that you have permission to do so",
-  "notice_4": "When downloading files as a zip, if the attachments are too large, they will be downloaded separately to prevent browser crashes",
-  "notice_5": "The download path is the browser's default download path. During download, the original file name of the attachment will be used. If there are duplicate names, the browser will automatically add a suffix for differentiation",
-  "notice_6": "When adding data tables, views, or fields to multidimensional tables, please rerun this tool",
-  "notice_7": "The Zip packaging function uses the JSZip plugin. The experience with large data responses is slow. Currently, it is only used for code communication and learning. For large files, please use the individual download mode.",
   "refresh_form": "Refresh Form",
   "data_table_column": "Data Table Column",
   "view_column": "View Column",

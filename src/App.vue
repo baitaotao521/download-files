@@ -5,6 +5,18 @@ import { ref } from 'vue'
 import { useTheme } from '@/hooks/useTheme'
 useTheme()
 const isVisible = ref(true)
+const usageInstructionsUrl =
+  'https://p6bgwki4n6.feishu.cn/docx/Pn7Kdw2rPocwPZxVfF5cMsAcnle'
+
+// 打开“使用须知”飞书文档
+const openUsageInstructions = () => {
+  const newWindow = window.open(
+    usageInstructionsUrl,
+    '_blank',
+    'noopener,noreferrer'
+  )
+  if (newWindow) newWindow.opener = null
+}
 const refreshForm = () => {
   isVisible.value = false
   setTimeout(() => {
@@ -18,7 +30,7 @@ const refreshForm = () => {
     <div class="help">
       <a
         target="_blank"
-        href="https://p6bgwki4n6.feishu.cn/docx/Pn7Kdw2rPocwPZxVfF5cMsAcnle?from=from_copylink"
+        href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=9cei5274-2def-477b-86e2-df3471804317"
         >{{ $t('help') }}
         <el-icon class="el-icon--right"
           ><QuestionFilled size="small"
@@ -27,23 +39,10 @@ const refreshForm = () => {
     </div>
 
     <div class="hd">
-      <el-popover placement="top-start" :width="'80%'" trigger="click">
-        <template #reference>
-          <el-button type="primary">
-            {{ $t("usage_instructions")
-            }}<el-icon class="el-icon--right"><Warning /></el-icon>
-          </el-button>
-        </template>
-        <ol>
-          <li>{{ $t("notice_1") }}</li>
-          <li>{{ $t("notice_2") }}</li>
-          <li>{{ $t("notice_3") }}</li>
-          <li>{{ $t("notice_4") }}</li>
-          <li>{{ $t("notice_5") }}</li>
-          <li>{{ $t("notice_6") }}</li>
-          <li>{{ $t("notice_7") }}</li>
-        </ol>
-      </el-popover>
+      <el-button type="primary" @click="openUsageInstructions">
+        {{ $t('usage_instructions')
+        }}<el-icon class="el-icon--right"><Warning /></el-icon>
+      </el-button>
       <el-button type="primary" @click="refreshForm">
         {{ $t("refresh_form")
         }}<el-icon class="el-icon--right"><Refresh /></el-icon>
@@ -83,29 +82,7 @@ main {
     flex: 1;
   }
 }
-.forms {
-  min-height: 300px;
-}
-
-ol {
-  margin-left: 8px;
-  padding-left: 8px;
-  line-height: 1.5;
-  flex-direction: column;
-  font-size: 12px;
-  color: var(--N500);
-  margin-bottom: 16px;
-  li {
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
-    position: relative;
-    &:before {
-      content: "";
-      border: 3px solid var(--el-color-primary);
-      border-radius: 50%;
-      margin-top: 0.5em;
-    }
+  .forms {
+    min-height: 300px;
   }
-}
 </style>

@@ -1,12 +1,5 @@
 {
   "usage_instructions": "Instrucciones de uso",
-  "notice_1": "Se recomienda usar el navegador Chrome para descargar, otros navegadores pueden presentar problemas anómalos",
-  "notice_2": "Se usa la función nativa de descarga del navegador; si solicita descargar varios archivos, selecciona \"Permitir\"",
-  "notice_3": "Necesitas permiso para descargar adjuntos, confirma que lo tengas antes de usar la herramienta",
-  "notice_4": "Al descargar archivos como zip, si los adjuntos son demasiado grandes se descargarán por separado para evitar que el navegador falle",
-  "notice_5": "La ruta de descarga es la predeterminada del navegador; se usará el nombre original del archivo y, si se repite, el navegador añadirá automáticamente un sufijo para diferenciarlo",
-  "notice_6": "Cuando agregues tablas de datos, vistas o campos a tablas multidimensionales, vuelve a ejecutar esta herramienta",
-  "notice_7": "La función de empaquetado zip usa el plugin JSZip. Con grandes volúmenes de datos puede ser lenta y actualmente es solo para intercambio y aprendizaje de código. Para archivos grandes usa el modo de descarga individual.",
   "refresh_form": "Actualizar formulario",
   "data_table_column": "Columna de tabla de datos",
   "view_column": "Columna de vista",
