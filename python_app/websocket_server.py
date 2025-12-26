@@ -8,7 +8,7 @@ import contextlib
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import websockets
 
@@ -132,6 +132,20 @@ class WebSocketDownloadServer:
 
     future = asyncio.run_coroutine_threadsafe(_apply_update(), self._loop)
     future.result(timeout=5)
+
+  def retry_failed_files(self) -> Dict[str, int]:
+    """请求后台下载器重试当前任务的失败文件。"""
+    if not self.is_running or not self._loop or not self._downloader:
+      raise RuntimeError('server is not running')
+
+    async def _apply_retry() -> Dict[str, int]:
+      """在事件循环中调度失败文件重试任务。"""
+      if not self._downloader:
+        raise RuntimeError('downloader is not available')
+      return await self._downloader.schedule_retry_failed_files()
+
+    future = asyncio.run_coroutine_threadsafe(_apply_retry(), self._loop)
+    return future.result(timeout=5)
 
 
 __all__ = ['run_server_forever', 'WebSocketDownloadServer']

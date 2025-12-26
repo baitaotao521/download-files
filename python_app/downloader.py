@@ -10,7 +10,7 @@ import time
 import zipfile
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Dict, Literal, Optional, Set
+from typing import Any, Deque, Dict, List, Literal, Optional, Set, Tuple
 
 import aiohttp
 import websockets
@@ -56,14 +56,101 @@ class DownloadJobState:
     self.job_name: Optional[str] = None
     self.total: int = 0
     self.completed = False
+    self.concurrency: int = handler.default_concurrency
     self.download_mode: Literal['url', 'token'] = 'url'
     self.app_token: Optional[str] = None
     self.table_id: Optional[str] = None
     self.sdk_client: Any = None
     self._completion_requested = False
+    self._file_payloads: Dict[str, Dict[str, Any]] = {}
+    self._failed_file_keys: Set[str] = set()
     self._download_url_refresh_waiters: Dict[str, asyncio.Future[str]] = {}
     self._download_url_refresh_cache: Dict[str, str] = {}
     self._download_url_refresh_semaphore = asyncio.Semaphore(DOWNLOAD_URL_REFRESH_MAX_INFLIGHT)
+    self._retried_failed_files_once = False
+
+  def _normalize_file_payload(self, data: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """标准化单文件 payload，并返回 (file_key, normalized_payload)。"""
+    normalized = dict(data)
+    order = normalized.get('order')
+    if order is not None:
+      try:
+        normalized['order'] = int(order)
+      except (TypeError, ValueError):
+        pass
+    normalized['path'] = str(normalized.get('path') or '')
+    if 'name' in normalized and normalized['name'] is not None:
+      normalized['name'] = str(normalized['name'])
+    if 'downloadUrl' in normalized and normalized['downloadUrl'] is not None:
+      normalized['downloadUrl'] = str(normalized['downloadUrl'])
+    identifier = normalized.get('recordId') or normalized.get('token') or normalized.get('downloadUrl')
+    file_key = self.handler._build_file_key(normalized.get('order'), normalized.get('name'), normalized['path'], identifier)
+    return (file_key, normalized)
+
+  def _remember_file_payload(self, file_key: str, payload: Dict[str, Any]) -> None:
+    """缓存文件 payload 供下载结束后重试失败文件。"""
+    existing = self._file_payloads.get(file_key) or {}
+    merged = dict(existing)
+    for key, value in payload.items():
+      if value is None:
+        continue
+      merged[key] = value
+    self._file_payloads[file_key] = merged
+
+  def _remember_download_url(self, file_key: str, download_url: str) -> None:
+    """在 URL 模式下缓存临时下载链接，便于断线后重试失败文件。"""
+    if not download_url:
+      return
+    payload = self._file_payloads.get(file_key) or {}
+    payload['downloadUrl'] = str(download_url)
+    self._file_payloads[file_key] = payload
+
+  def get_failed_file_payloads(self) -> List[Dict[str, Any]]:
+    """返回失败文件的 payload 列表（用于桌面端提示后重试）。"""
+    failed_payloads: List[Dict[str, Any]] = []
+    for file_key in self._failed_file_keys:
+      payload = self._file_payloads.get(file_key)
+      if isinstance(payload, dict) and payload:
+        failed_payloads.append(dict(payload))
+    failed_payloads.sort(key=lambda item: (item.get('order') is None, item.get('order') or 0))
+    return failed_payloads
+
+  async def retry_failed_files_via_frontend(self, websocket) -> int:
+    """客户端模式兜底：对失败文件再重试一轮，并强制向前端刷新临时链接。"""
+    if self.download_mode != 'url':
+      return 0
+    if self._retried_failed_files_once:
+      return 0
+    if not self._failed_file_keys:
+      return 0
+    if websocket is None or getattr(websocket, 'closed', False):
+      return 0
+
+    failed_payloads = self.get_failed_file_payloads()
+    if not failed_payloads:
+      return 0
+    retry_payloads: List[Dict[str, Any]] = []
+    for payload in failed_payloads:
+      order = payload.get('order')
+      if not isinstance(order, int):
+        continue
+      retry_payload = dict(payload)
+      retry_payload.pop('downloadUrl', None)
+      retry_payloads.append(retry_payload)
+    if not retry_payloads:
+      return 0
+
+    self._retried_failed_files_once = True
+    await self.handler._send_ack(
+      websocket,
+      status='success',
+      message=f'Retrying {len(retry_payloads)} failed file(s)...',
+      order=None,
+      extra={'stage': 'retry_failed_files', 'failed': len(retry_payloads)}
+    )
+    for payload in retry_payloads:
+      await self.enqueue_download(payload, websocket)
+    return len(retry_payloads)
 
   async def request_download_url_refresh(
     self,
@@ -74,11 +161,14 @@ class DownloadJobState:
     file_name: str
   ) -> str:
     """向前端请求刷新 downloadUrl，并等待新的临时链接返回。"""
+    if websocket is None or getattr(websocket, 'closed', False):
+      raise RuntimeError('WebSocket 已断开，无法刷新下载链接，请在前端重新发起下载。')
     if order is None:
       raise RuntimeError('missing order for download url refresh')
     cached_url = self._download_url_refresh_cache.pop(file_key, None)
     if cached_url:
       logging.debug('consume cached download url for %s (%s)', file_name, file_key)
+      self._remember_download_url(file_key, str(cached_url))
       return cached_url
     async with self._download_url_refresh_semaphore:
       waiter = self._download_url_refresh_waiters.get(file_key)
@@ -208,8 +298,11 @@ class DownloadJobState:
     # 授权码模式则沿用前端配置（允许更灵活地压低并发以规避鉴权限流）。
     if self.download_mode == 'token':
       self.semaphore = asyncio.Semaphore(concurrent)
+      self.concurrency = concurrent
     else:
       self.semaphore = asyncio.Semaphore(self.handler.default_concurrency)
+      self.concurrency = self.handler.default_concurrency
+    self.handler.register_active_job_state(self)
     self.handler._monitor_job_started(
       self.total,
       job_id=self.job_id,
@@ -272,7 +365,9 @@ class DownloadJobState:
         order=data.get('order')
       )
       return
-    task = asyncio.create_task(self._download_worker(dict(data), websocket))
+    file_key, normalized = self._normalize_file_payload(data)
+    self._remember_file_payload(file_key, normalized)
+    task = asyncio.create_task(self._download_worker(dict(normalized), websocket))
     self.tasks.add(task)
     task.add_done_callback(lambda fut: self.tasks.discard(fut))
 
@@ -282,6 +377,10 @@ class DownloadJobState:
       return
     if self.tasks:
       await asyncio.gather(*self.tasks, return_exceptions=True)
+    if not aborted:
+      retry_count = await self.retry_failed_files_via_frontend(websocket)
+      if retry_count and self.tasks:
+        await asyncio.gather(*self.tasks, return_exceptions=True)
     if self.zip_after and self.job_dir:
       zip_path = await asyncio.to_thread(self._create_zip_archive, self.job_dir)
       self.handler._monitor_job_zip_path(zip_path)
@@ -364,7 +463,11 @@ class DownloadJobState:
     relative_path = file_info.get('path', '')
     order = file_info.get('order')
     identifier = record_id or file_token or download_url
-    file_key = self.handler._build_file_key(order, file_name, relative_path, identifier)
+    file_key = self.handler._build_file_key(order, file_name, str(relative_path or ''), identifier)
+
+    self._remember_file_payload(file_key, dict(file_info))
+    if isinstance(download_url, str) and download_url:
+      self._remember_download_url(file_key, download_url)
 
     self.handler._monitor_file_registered(
       file_key,
@@ -381,6 +484,7 @@ class DownloadJobState:
         order=order
       )
       self.handler._monitor_file_status(file_key, 'failed', error='missing file name')
+      self._failed_file_keys.add(file_key)
       return
 
     if self.download_mode == 'token':
@@ -392,6 +496,7 @@ class DownloadJobState:
           order=order
         )
         self.handler._monitor_file_status(file_key, 'failed', error='authorization payload missing identifiers')
+        self._failed_file_keys.add(file_key)
         return
 
     if self.download_mode == 'url' and not download_url and not isinstance(order, int):
@@ -402,10 +507,11 @@ class DownloadJobState:
         order=order
       )
       self.handler._monitor_file_status(file_key, 'failed', error='missing download url and order')
+      self._failed_file_keys.add(file_key)
       return
 
     success = False
-    saved_path = None
+    saved_path: Optional[Path] = None
     last_error: Optional[str] = None
     target_path: Optional[Path] = None
     self.handler._monitor_download_started()
@@ -416,7 +522,7 @@ class DownloadJobState:
       try:
         if target_path is None:
           # 为同一个文件在多次重试时复用同一目标路径，配合 .part 文件实现断点续传。
-          target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
+          target_path = self.handler._build_target_path(str(relative_path or ''), str(file_name), base_dir=self.job_dir)
         if self.download_mode == 'token':
           saved_path = await self.handler._download_file_with_token(
             self.sdk_client,
@@ -433,11 +539,12 @@ class DownloadJobState:
               websocket,
               order=order if isinstance(order, int) else None,
               file_key=file_key,
-              file_name=file_name
+              file_name=str(file_name)
             )
+            self._remember_download_url(file_key, str(download_url))
           saved_path = await self.handler._download_file(
             self.http_session,
-            download_url,
+            str(download_url),
             target_path,
             file_key=file_key
           )
@@ -456,8 +563,9 @@ class DownloadJobState:
               websocket,
               order=order if isinstance(order, int) else None,
               file_key=file_key,
-              file_name=file_name
+              file_name=str(file_name)
             )
+            self._remember_download_url(file_key, str(download_url))
             continue
           except Exception as refresh_exc:  # noqa: BLE001
             last_error = self.handler._format_download_exception(refresh_exc)
@@ -485,13 +593,7 @@ class DownloadJobState:
 
     self.handler._monitor_download_finished(success=success)
     if not success:
-      if target_path is not None:
-        temp_path = target_path.with_name(f'{target_path.name}.part')
-        try:
-          if temp_path.exists():
-            temp_path.unlink()
-        except OSError:
-          logging.debug('failed to cleanup temp file after retries: %s', temp_path)
+      self._failed_file_keys.add(file_key)
       self.handler._monitor_file_status(file_key, 'failed', error=last_error or 'download failed')
       await self.handler._send_ack(
         websocket,
@@ -508,6 +610,7 @@ class DownloadJobState:
       )
       return
 
+    self._failed_file_keys.discard(file_key)
     self.handler._monitor_file_status(file_key, 'completed')
     await self.handler._send_ack(
       websocket,
@@ -544,6 +647,8 @@ class AttachmentDownloader:
     self._client_cache: Dict[str, Any] = {}
     self._sdk_rate_lock = asyncio.Lock()
     self._sdk_request_times: Deque[float] = deque()
+    self._active_job_state: Optional[DownloadJobState] = None
+    self._retry_task: Optional[asyncio.Task] = None
 
   def _build_http_timeout(self) -> aiohttp.ClientTimeout:
     """构造适合大文件下载的 aiohttp 超时策略，避免长耗时请求被默认超时取消。"""
@@ -556,6 +661,125 @@ class AttachmentDownloader:
   def _build_http_connector(self) -> aiohttp.TCPConnector:
     """构造不限制连接数的连接器，避免 aiohttp 默认连接上限影响普通模式并发下载。"""
     return aiohttp.TCPConnector(limit=0, limit_per_host=0)
+
+  def register_active_job_state(self, job_state: DownloadJobState) -> None:
+    """记录最近一次配置的任务状态，便于桌面端触发失败文件重试。"""
+    self._active_job_state = job_state
+
+  async def schedule_retry_failed_files(self) -> Dict[str, int]:
+    """调度失败文件重试任务（后台执行），返回可重试/不可重试数量。"""
+    if self._retry_task and not self._retry_task.done():
+      raise RuntimeError('已有失败文件重试任务正在执行，请等待结束后再试。')
+    job_state = self._active_job_state
+    if not job_state or not job_state.configured or not job_state.job_dir:
+      raise RuntimeError('没有可重试的下载任务。')
+    failed_payloads = job_state.get_failed_file_payloads()
+    failed_total = len(failed_payloads)
+    if failed_total == 0:
+      raise RuntimeError('当前任务没有失败文件，无需重试。')
+
+    mode = job_state.download_mode
+    retryable: List[Dict[str, Any]] = []
+    unavailable = 0
+    if mode == 'token':
+      if not job_state.app_token or not job_state.table_id:
+        unavailable = failed_total
+      else:
+        for payload in failed_payloads:
+          if payload.get('token') and payload.get('fieldId') and payload.get('recordId'):
+            retryable.append(payload)
+          else:
+            unavailable += 1
+    else:
+      for payload in failed_payloads:
+        if payload.get('downloadUrl'):
+          retryable.append(payload)
+        else:
+          unavailable += 1
+
+    if not retryable:
+      return {
+        'failed': failed_total,
+        'retryable': 0,
+        'unavailable': unavailable
+      }
+
+    context = {
+      'jobDir': job_state.job_dir,
+      'jobId': job_state.job_id or '',
+      'jobName': job_state.job_name or 'download',
+      'mode': mode,
+      'appToken': job_state.app_token,
+      'tableId': job_state.table_id,
+      'concurrency': job_state.concurrency or self.default_concurrency
+    }
+    self._retry_task = asyncio.create_task(self._run_retry_job(context, retryable))
+    return {
+      'failed': failed_total,
+      'retryable': len(retryable),
+      'unavailable': unavailable
+    }
+
+  async def _run_retry_job(self, context: Dict[str, Any], payloads: List[Dict[str, Any]]) -> None:
+    """后台执行失败文件重试任务（不依赖前端连接）。"""
+    if not payloads:
+      return
+    mode = str(context.get('mode') or 'url')
+    base_job_id = str(context.get('jobId') or 'job')
+    base_job_name = str(context.get('jobName') or base_job_id)
+    job_dir = context.get('jobDir')
+    if not isinstance(job_dir, Path):
+      job_dir = Path(str(job_dir or '')).expanduser().resolve()
+    retry_job_id = f'{base_job_id}_retry_{int(time.time() * 1000)}'
+    retry_job_name = f'{base_job_name}_retry'
+    try:
+      concurrency = int(context.get('concurrency') or self.default_concurrency)
+    except (TypeError, ValueError):
+      concurrency = self.default_concurrency
+    concurrency = max(1, min(concurrency, 50))
+
+    self._monitor_job_started(
+      len(payloads),
+      job_id=retry_job_id,
+      job_name=retry_job_name,
+      job_dir=job_dir,
+      zip_after=False,
+      mode=mode
+    )
+
+    retry_state: Optional[DownloadJobState] = None
+    try:
+      async with aiohttp.ClientSession(
+        timeout=self._build_http_timeout(),
+        connector=self._build_http_connector()
+      ) as session:
+        retry_state = DownloadJobState(self, session)
+        self._active_job_state = retry_state
+        retry_state.configured = True
+        retry_state.zip_after = False
+        retry_state.job_dir = job_dir
+        retry_state.job_id = retry_job_id
+        retry_state.job_name = retry_job_name
+        retry_state.total = len(payloads)
+        retry_state.download_mode = mode if mode in ('url', 'token') else 'url'
+        retry_state.concurrency = concurrency
+        retry_state.semaphore = asyncio.Semaphore(concurrency)
+        if retry_state.download_mode == 'token':
+          retry_state.app_token = str(context.get('appToken') or '').strip() or None
+          retry_state.table_id = str(context.get('tableId') or '').strip() or None
+          if not retry_state.app_token or not retry_state.table_id:
+            raise RuntimeError('授权码模式缺少 appToken 或 tableId，无法重试失败文件。')
+          retry_state.sdk_client = self.create_sdk_client(retry_state.app_token)
+        for payload in payloads:
+          await retry_state.enqueue_download(dict(payload), websocket=None)
+        retry_state.mark_completion_requested()
+        await retry_state.finalize(websocket=None, aborted=False)
+    except Exception:  # noqa: BLE001
+      logging.exception('failed files retry task crashed')
+      if retry_state:
+        await retry_state.shutdown(None)
+      else:
+        self._monitor_job_finished(aborted=True)
 
   def _parse_content_range(self, value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
     """解析 Content-Range 头，返回 (start, total)，解析失败则返回 (None, None)。"""
@@ -976,6 +1200,8 @@ class AttachmentDownloader:
     extra: Optional[Dict[str, Any]] = None
   ) -> None:
     """向前端回传 ACK，便于 UI 展示。"""
+    if websocket is None:
+      return
     payload: Dict[str, Any] = {
       'type': ACK_MESSAGE_TYPE,
       'data': {

@@ -86,9 +86,7 @@ class DownloaderDesktopApp:
     self.file_display_limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
     self._initial_language_code = self._normalize_language_code(self.user_preferences.language)
     self.file_columns = ('name', 'status', 'progress', 'path')
-    self._completion_prompt_shown = False
-    self._last_overall_total = 0
-    self._last_overall_finished = 0
+    self._last_completion_history_key = self._get_latest_history_key()
     self._history_window: Optional[tk.Toplevel] = None
     self._history_failed_window: Optional[tk.Toplevel] = None
     self._history_record_map: Dict[str, Dict[str, object]] = {}
@@ -98,6 +96,19 @@ class DownloaderDesktopApp:
     self._schedule_log_polling()
     self._schedule_stats_refresh()
     self._start_server(auto=True)
+
+  def _get_latest_history_key(self) -> str:
+    """返回当前历史记录中最新一条的 recordKey（用于避免启动时误弹窗）。"""
+    try:
+      snapshot = self.monitor.snapshot()
+      history = snapshot.get('history') or []
+    except Exception:  # noqa: BLE001
+      return ''
+    if isinstance(history, list) and history:
+      first = history[0]
+      if isinstance(first, dict):
+        return str(first.get('recordKey') or '')
+    return ''
 
   def _build_widgets(self) -> None:
     """创建并布局所有 UI 控件。"""
@@ -508,6 +519,10 @@ class DownloaderDesktopApp:
     """将历史下载记录渲染到“下载记录”窗口表格中。"""
     if not self._history_window or not self._history_window.winfo_exists():
       return
+    try:
+      previous_yview = self.history_tree.yview()
+    except Exception:  # noqa: BLE001
+      previous_yview = (0.0, 1.0)
     snapshot = self.monitor.snapshot()
     raw_history = snapshot.get('history') or []
     history: List[Dict[str, object]] = []
@@ -566,11 +581,22 @@ class DownloaderDesktopApp:
         ),
         tags=tags
       )
-    if history:
-      self.history_tree.yview_moveto(0.0)
     if selected_key and selected_key in self._history_record_map:
       self.history_tree.selection_set(selected_key)
       self.history_tree.focus(selected_key)
+      try:
+        self.history_tree.see(selected_key)
+      except Exception:  # noqa: BLE001
+        pass
+      return
+
+    if history and not selected_key:
+      self.history_tree.yview_moveto(0.0)
+      return
+    try:
+      self.history_tree.yview_moveto(previous_yview[0])
+    except Exception:  # noqa: BLE001
+      pass
 
   def _get_selected_history_record(self) -> Optional[Dict[str, object]]:
     """返回当前在“下载记录”窗口中选中的记录。"""
@@ -672,40 +698,38 @@ class DownloaderDesktopApp:
 
   def _maybe_prompt_job_completion(self, snapshot: Dict[str, object]) -> None:
     """在任务完成时弹出提示，并提供打开保存目录的入口。"""
-    overall = snapshot.get('overall') or {}
-    if not isinstance(overall, dict):
+    history = snapshot.get('history') or []
+    if not isinstance(history, list) or not history:
+      return
+    latest = history[0]
+    if not isinstance(latest, dict):
+      return
+    record_key = str(latest.get('recordKey') or '')
+    if not record_key or record_key == self._last_completion_history_key:
+      return
+
+    status = str(latest.get('status') or '')
+    if status not in ('completed', 'aborted'):
+      self._last_completion_history_key = record_key
+      return
+
+    job_name = str(latest.get('jobName') or '')
+    job_id = str(latest.get('jobId') or '')
+    if job_name.endswith('_retry') or '_retry_' in job_id:
+      self._last_completion_history_key = record_key
       return
 
     try:
-      total = int(overall.get('total', 0) or 0)
-      finished = int(overall.get('finished', 0) or 0)
-      success = int(overall.get('completed', 0) or 0)
-      failed = int(overall.get('failed', 0) or 0)
-      active = int(snapshot.get('active', 0) or 0)
+      total = int(latest.get('total', 0) or 0)
+      success = int(latest.get('completed', 0) or 0)
+      failed = int(latest.get('failed', 0) or 0)
     except (TypeError, ValueError):
+      self._last_completion_history_key = record_key
       return
 
-    connected = bool(snapshot.get('connected', False))
-    if not connected or total <= 0:
-      self._completion_prompt_shown = False
-      self._last_overall_total = total
-      self._last_overall_finished = finished
-      return
-
-    if finished < self._last_overall_finished or (total != self._last_overall_total and finished == 0):
-      self._completion_prompt_shown = False
-
-    if self._completion_prompt_shown or active != 0 or finished < total:
-      self._last_overall_total = total
-      self._last_overall_finished = finished
-      return
-
-    try:
-      output_dir = self._resolve_output_dir()
-      path_display = str(output_dir)
-    except Exception as exc:  # noqa: BLE001
-      logging.exception('failed to resolve output dir for completion prompt: %s', exc)
-      path_display = str(self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR)
+    job_dir = str(latest.get('jobDir') or '')
+    output_dir = str(latest.get('outputDir') or '')
+    path_display = job_dir or output_dir or str(self.output_var.get().strip() or self.user_preferences.output_dir or DEFAULT_OUTPUT_DIR)
 
     message = self._t(
       'msg_job_completed_open_dir',
@@ -721,10 +745,64 @@ class DownloaderDesktopApp:
       should_open = False
 
     if should_open:
-      self._open_output_dir()
-    self._completion_prompt_shown = True
-    self._last_overall_total = total
-    self._last_overall_finished = finished
+      if job_dir:
+        self._open_selected_history_path(job_dir)
+      else:
+        self._open_output_dir()
+    self._last_completion_history_key = record_key
+
+  def _open_selected_history_path(self, path: str) -> None:
+    """打开指定路径（用于任务完成弹窗；路径不存在则仅提示）。"""
+    if not path:
+      return
+    try:
+      target = Path(path).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+      target = Path(path)
+    if not target.exists():
+      messagebox.showinfo(self._t('dialog_info_title'), self._t('history_open_dir_not_found', path=str(target)))
+      return
+    try:
+      self._open_system_path(target)
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to open path: %s', exc)
+      messagebox.showerror(self._t('dialog_error_title'), str(exc))
+
+  def _prompt_retry_failed_files(self, failed: int) -> None:
+    """当存在失败文件时提示用户是否重试。"""
+    if failed <= 0:
+      return
+    try:
+      should_retry = messagebox.askyesno(
+        self._t('dialog_confirm_title'),
+        self._t('msg_job_retry_failed_confirm', failed=failed)
+      )
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to show retry failed files prompt: %s', exc)
+      return
+    if not should_retry:
+      return
+    if not self.server or not self.server.is_running:
+      messagebox.showerror(self._t('dialog_error_title'), self._t('msg_retry_failed_server_not_running'))
+      return
+    try:
+      result = self.server.retry_failed_files()
+    except Exception as exc:  # noqa: BLE001
+      logging.exception('failed to schedule retry failed files: %s', exc)
+      messagebox.showerror(self._t('dialog_error_title'), str(exc))
+      return
+    retryable = int(result.get('retryable', 0) or 0)
+    unavailable = int(result.get('unavailable', 0) or 0)
+    if retryable <= 0:
+      messagebox.showinfo(
+        self._t('dialog_info_title'),
+        self._t('msg_job_retry_no_retryable', unavailable=unavailable)
+      )
+      return
+    messagebox.showinfo(
+      self._t('dialog_info_title'),
+      self._t('msg_job_retry_started', retryable=retryable, unavailable=unavailable)
+    )
 
   def _refresh_stats(self) -> None:
     """将下载统计渲染到界面。"""
@@ -755,8 +833,20 @@ class DownloaderDesktopApp:
     if self.failed_only_var.get():
       source_files = [entry for entry in files if entry.get('status') == 'failed']
     visible_files = source_files[-limit:]
-    for item in self.file_tree.get_children():
-      self.file_tree.delete(item)
+
+    selected = self.file_tree.selection()
+    selected_key = selected[0] if selected else None
+    existing_children = list(self.file_tree.get_children())
+    existing_keys = set(existing_children)
+
+    try:
+      previous_yview = self.file_tree.yview()
+    except Exception:  # noqa: BLE001
+      previous_yview = (0.0, 1.0)
+    should_autoscroll = bool(previous_yview and previous_yview[1] >= 0.999)
+
+    desired_keys: List[str] = []
+    desired_set: set[str] = set()
     for entry in visible_files:
       status_key = f"file_status_{entry.get('status', 'pending')}"
       status_label = self._t(status_key)
@@ -766,20 +856,55 @@ class DownloaderDesktopApp:
       progress_value = float(entry.get('percent', 0.0) or 0.0)
       progress_text = f"{progress_value:.0f}%"
       tags = ('failed',) if entry.get('status') == 'failed' else ()
-      self.file_tree.insert(
-        '',
-        tk.END,
-        iid=str(entry.get('key', '')),
-        values=(
-          entry.get('name', ''),
-          status_label,
-          progress_text,
-          entry.get('path', '')
-        ),
-        tags=tags
+      iid = str(entry.get('key', '') or '')
+      if not iid:
+        continue
+      desired_keys.append(iid)
+      desired_set.add(iid)
+      values = (
+        entry.get('name', ''),
+        status_label,
+        progress_text,
+        entry.get('path', '')
       )
+      if iid in existing_keys:
+        try:
+          self.file_tree.item(iid, values=values, tags=tags)
+        except Exception:  # noqa: BLE001
+          pass
+      else:
+        try:
+          self.file_tree.insert('', tk.END, iid=iid, values=values, tags=tags)
+          existing_keys.add(iid)
+        except Exception:  # noqa: BLE001
+          continue
+
+    for item in existing_children:
+      if item not in desired_set:
+        self.file_tree.delete(item)
+
+    for idx, iid in enumerate(desired_keys):
+      try:
+        self.file_tree.move(iid, '', idx)
+      except Exception:  # noqa: BLE001
+        continue
+
+    if selected_key and selected_key in desired_set:
+      self.file_tree.selection_set(selected_key)
+      self.file_tree.focus(selected_key)
+      try:
+        self.file_tree.see(selected_key)
+      except Exception:  # noqa: BLE001
+        pass
+
     if visible_files:
-      self.file_tree.yview_moveto(1.0)
+      if should_autoscroll:
+        self.file_tree.yview_moveto(1.0)
+      else:
+        try:
+          self.file_tree.yview_moveto(previous_yview[0])
+        except Exception:  # noqa: BLE001
+          pass
 
   def _parse_port_value(self, value: str) -> int:
     """校验端口输入并返回整数。"""

@@ -745,6 +745,14 @@ class FileDownloader {
             })
             return
           }
+          if (stage === 'retry_failed_files') {
+            this.emit('zip_progress', {
+              stage,
+              message: data.message,
+              failed: data.failed
+            })
+            return
+          }
           if (stage === 'job_complete') {
             hasJobCompleted = true
             this.emit('zip_progress', {

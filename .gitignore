@@ -27,3 +27,10 @@ coverage
 *.sln
 *.sw?
 /scripts/downloads/*
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Serena workspace state
+.serena/
