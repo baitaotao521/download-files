@@ -204,8 +204,12 @@ class DownloadJobState:
     await self._configure_download_mode(data, websocket)
     if not self.configured:
       return False
+    # URL 模式并发由 Python 端统一控制，避免前端固定传 1 导致下载过慢；
+    # 授权码模式则沿用前端配置（允许更灵活地压低并发以规避鉴权限流）。
     if self.download_mode == 'token':
       self.semaphore = asyncio.Semaphore(concurrent)
+    else:
+      self.semaphore = asyncio.Semaphore(self.handler.default_concurrency)
     self.handler._monitor_job_started(
       self.total,
       job_id=self.job_id,
@@ -221,7 +225,7 @@ class DownloadJobState:
       order=None,
       extra={'stage': 'server_info', 'version': APP_VERSION}
     )
-    concurrent_label = concurrent if self.semaphore else 'unlimited'
+    concurrent_label = concurrent if self.download_mode == 'token' else self.handler.default_concurrency
     logging.info('job configured: job_id=%s concurrent=%s zip=%s', self.job_id, concurrent_label, zip_after)
     return True
 
@@ -403,13 +407,16 @@ class DownloadJobState:
     success = False
     saved_path = None
     last_error: Optional[str] = None
+    target_path: Optional[Path] = None
     self.handler._monitor_download_started()
     self.handler._monitor_file_status(file_key, 'downloading')
 
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
       try:
-        target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
+        if target_path is None:
+          # 为同一个文件在多次重试时复用同一目标路径，配合 .part 文件实现断点续传。
+          target_path = self.handler._build_target_path(relative_path, file_name, base_dir=self.job_dir)
         if self.download_mode == 'token':
           saved_path = await self.handler._download_file_with_token(
             self.sdk_client,
@@ -478,6 +485,13 @@ class DownloadJobState:
 
     self.handler._monitor_download_finished(success=success)
     if not success:
+      if target_path is not None:
+        temp_path = target_path.with_name(f'{target_path.name}.part')
+        try:
+          if temp_path.exists():
+            temp_path.unlink()
+        except OSError:
+          logging.debug('failed to cleanup temp file after retries: %s', temp_path)
       self.handler._monitor_file_status(file_key, 'failed', error=last_error or 'download failed')
       await self.handler._send_ack(
         websocket,
@@ -543,11 +557,47 @@ class AttachmentDownloader:
     """构造不限制连接数的连接器，避免 aiohttp 默认连接上限影响普通模式并发下载。"""
     return aiohttp.TCPConnector(limit=0, limit_per_host=0)
 
+  def _parse_content_range(self, value: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+    """解析 Content-Range 头，返回 (start, total)，解析失败则返回 (None, None)。"""
+    if not value:
+      return (None, None)
+    raw = str(value).strip()
+    if not raw:
+      return (None, None)
+    try:
+      unit, rest = raw.split(' ', 1)
+    except ValueError:
+      return (None, None)
+    if unit.lower() != 'bytes':
+      return (None, None)
+    try:
+      range_part, total_part = rest.split('/', 1)
+    except ValueError:
+      return (None, None)
+    total = None
+    total_part = total_part.strip()
+    if total_part and total_part != '*':
+      try:
+        total = int(total_part)
+      except ValueError:
+        total = None
+    range_part = range_part.strip()
+    if not range_part or range_part.startswith('*'):
+      return (None, total)
+    try:
+      start_text, _ = range_part.split('-', 1)
+      start = int(start_text)
+    except (ValueError, TypeError):
+      return (None, total)
+    return (start, total)
+
   def _format_download_exception(self, exc: BaseException) -> str:
     """将下载异常转换为可读文本，避免 TimeoutError 等异常返回空字符串。"""
     if isinstance(exc, aiohttp.ClientResponseError):
       message = (exc.message or '').strip()
       return f'HTTP {exc.status}: {message}' if message else f'HTTP {exc.status}'
+    if isinstance(exc, aiohttp.ClientPayloadError):
+      return '下载中断：响应体不完整（可能是网络抖动或连接被重置），请稍后重试。'
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
       read_timeout = self.config.normalized_download_read_timeout()
       if read_timeout:
@@ -694,30 +744,67 @@ class AttachmentDownloader:
     *,
     file_key: str
   ) -> Path:
-    """使用 aiohttp 流式下载文件（先写入临时文件，成功后再原子替换）。"""
+    """使用 aiohttp 流式下载文件（支持断点续传，成功后再原子替换）。"""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_destination = destination.with_name(f'{destination.name}.part')
-    logging.info('downloading %s -> %s', url, destination)
-    try:
-      if temp_destination.exists():
-        temp_destination.unlink()
-    except OSError:
-      logging.debug('failed to cleanup temp file before download: %s', temp_destination)
-    async with session.get(url) as response:
-      response.raise_for_status()
+    resume_from = 0
+    if temp_destination.exists():
       try:
-        with temp_destination.open('wb') as file_obj:
-          async for chunk in response.content.iter_chunked(128 * 1024):
-            file_obj.write(chunk)
-            self._monitor_file_progress(file_key, len(chunk))
-        temp_destination.replace(destination)
-      except Exception:  # noqa: BLE001
+        resume_from = temp_destination.stat().st_size
+      except OSError:
+        resume_from = 0
+
+    headers: Dict[str, str] = {}
+    if resume_from > 0:
+      headers['Range'] = f'bytes={resume_from}-'
+      self._monitor_file_downloaded(file_key, resume_from)
+      logging.info('resuming %s (offset=%s) -> %s', url, resume_from, destination)
+    else:
+      logging.info('downloading %s -> %s', url, destination)
+
+    async with session.get(url, headers=headers) as response:
+      if response.status == 416 and resume_from > 0:
+        start, total = self._parse_content_range(response.headers.get('Content-Range'))
+        if total is not None and resume_from >= total:
+          self._monitor_file_downloaded(file_key, total)
+          temp_destination.replace(destination)
+          logging.info('saved file to %s', destination)
+          return destination
         try:
-          if temp_destination.exists():
-            temp_destination.unlink()
+          temp_destination.unlink()
         except OSError:
-          logging.debug('failed to cleanup temp file after error: %s', temp_destination)
-        raise
+          logging.debug('failed to cleanup temp file after 416: %s', temp_destination)
+        self._monitor_file_downloaded(file_key, 0)
+        return await self._download_file(session, url, destination, file_key=file_key)
+
+      response.raise_for_status()
+
+      write_mode = 'wb'
+      if resume_from > 0 and response.status == 206:
+        start, _ = self._parse_content_range(response.headers.get('Content-Range'))
+        if start != resume_from:
+          logging.info(
+            'range mismatch for %s (expected=%s got=%s), restart full download',
+            destination,
+            resume_from,
+            start
+          )
+          try:
+            temp_destination.unlink()
+          except OSError:
+            logging.debug('failed to cleanup temp file after range mismatch: %s', temp_destination)
+          self._monitor_file_downloaded(file_key, 0)
+          return await self._download_file(session, url, destination, file_key=file_key)
+        write_mode = 'ab'
+      elif resume_from > 0 and response.status == 200:
+        # 服务端不支持 Range 时会返回 200，此时需要从头下载并重置进度。
+        self._monitor_file_downloaded(file_key, 0)
+
+      with temp_destination.open(write_mode) as file_obj:
+        async for chunk in response.content.iter_chunked(128 * 1024):
+          file_obj.write(chunk)
+          self._monitor_file_progress(file_key, len(chunk))
+      temp_destination.replace(destination)
     logging.info('saved file to %s', destination)
     return destination
 
@@ -970,6 +1057,11 @@ class AttachmentDownloader:
     """记录指定文件的字节进度。"""
     if self.monitor:
       self.monitor.update_file_progress(key, bytes_count)
+
+  def _monitor_file_downloaded(self, key: str, downloaded: int) -> None:
+    """强制同步指定文件的已下载字节数（用于断点续传/重试重置进度）。"""
+    if self.monitor:
+      self.monitor.set_file_downloaded(key, downloaded)
 
   def _monitor_file_status(self, key: str, status: str, *, error: Optional[str] = None) -> None:
     """更新文件状态供 UI 展示。"""

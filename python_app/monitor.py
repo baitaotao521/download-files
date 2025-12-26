@@ -239,6 +239,14 @@ class DownloadMonitor:
         return
       entry.downloaded += bytes_delta
 
+  def set_file_downloaded(self, key: str, downloaded: int) -> None:
+    """强制设置指定文件的已下载字节数（用于断点续传或重试从头下载时重置）。"""
+    with self._lock:
+      entry = self._files.get(key)
+      if not entry:
+        return
+      entry.downloaded = max(int(downloaded or 0), 0)
+
   def mark_file_status(self, key: str, status: str, *, error: Optional[str] = None) -> None:
     """记录文件状态变更。"""
     with self._lock:
