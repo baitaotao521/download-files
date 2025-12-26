@@ -244,9 +244,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
+          - runner: macos-15-intel
             arch_tag: x64
-          - runner: macos-14
+          - runner: macos-latest
             arch_tag: arm64
     steps:
       - name: Checkout repository
