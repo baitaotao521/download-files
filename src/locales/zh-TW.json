@@ -113,6 +113,8 @@
   "websocket_connection_failed": "連線失敗，請確認客戶端是否正常啟動",
   "websocket_zip_stage_message": "Python 服務已生成壓縮包：{ path }",
   "websocket_job_stage_message": "Python 服務已完成下載任務",
-  "token_push_waiting_message": "推送完成，可關閉外掛，請等待客戶端下載成功"
+  "websocket_retry_failed_files_message": "檢測到失敗檔案，正在自動重試 { count } 個…",
+  "token_push_waiting_message": "推送完成，可關閉外掛，請等待客戶端下載成功",
+  "error_temp_download_url_timeout": "取得臨時下載連結逾時（10 秒），請稍後重試{ logId }"
 
 }

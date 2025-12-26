@@ -113,6 +113,8 @@
   "websocket_connection_failed":"连接失败，请确认客户端是否正常启动",
   "websocket_zip_stage_message":"Python 服务已生成压缩包：{ path }",
   "websocket_job_stage_message":"Python 服务已完成下载任务",
-  "token_push_waiting_message":"推送完成，可关闭当前插件，请等待客户端下载成功"
+  "websocket_retry_failed_files_message":"检测到失败文件，正在自动重试 { count } 个…",
+  "token_push_waiting_message":"推送完成，可关闭当前插件，请等待客户端下载成功",
+  "error_temp_download_url_timeout":"获取临时下载链接超时（10秒），请稍后重试{ logId }"
 
 }

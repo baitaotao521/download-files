@@ -113,5 +113,7 @@
   "websocket_connection_failed": "Connection failed. Please ensure the client is running.",
   "websocket_zip_stage_message": "Python service created a ZIP archive at { path }",
   "websocket_job_stage_message": "Python service finished the download job.",
-  "token_push_waiting_message": "Push complete. You may close the plugin and wait for the desktop client to finish downloading."
+  "websocket_retry_failed_files_message": "Retrying { count } failed file(s)...",
+  "token_push_waiting_message": "Push complete. You may close the plugin and wait for the desktop client to finish downloading.",
+  "error_temp_download_url_timeout": "Failed to get temporary download URL (timeout 10s). Please retry{ logId }"
 }

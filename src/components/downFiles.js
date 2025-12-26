@@ -304,12 +304,42 @@ class FileDownloader {
       fileInfo.name = this.getUniqueFileName(name, path)
       fileInfo.__uniqueNameReady = true
     }
-    fileInfo.fileUrl = await this.oTable.getAttachmentUrl(
-      token,
-      fieldId,
-      recordId
-    )
-    return fileInfo.fileUrl
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    const isTimeoutError = (error) => {
+      const code = error?.code
+      if (code === 'ECONNABORTED') {
+        return true
+      }
+      const message = error?.msg || error?.message || ''
+      return typeof message === 'string' && message.toLowerCase().includes('timeout')
+    }
+
+    const maxAttempts = 3
+    let lastError = null
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        fileInfo.fileUrl = await this.oTable.getAttachmentUrl(
+          token,
+          fieldId,
+          recordId
+        )
+        return fileInfo.fileUrl
+      } catch (error) {
+        lastError = error
+        if (isTimeoutError(error) && attempt < maxAttempts) {
+          await sleep(300 * attempt)
+          continue
+        }
+        const logId = error?.logId
+        if (isTimeoutError(error)) {
+          throw new Error($t('error_temp_download_url_timeout', { logId: logId ? ` (logId: ${logId})` : '' }))
+        }
+        const message = error?.msg || error?.message || $t('file_download_failed')
+        throw new Error(`${message}${logId ? ` (logId: ${logId})` : ''}`)
+      }
+    }
+    const fallbackLogId = lastError?.logId
+    throw new Error($t('error_temp_download_url_timeout', { logId: fallbackLogId ? ` (logId: ${fallbackLogId})` : '' }))
   }
   /**
    * 为桌面端下载预先生成稳定的唯一文件名，避免后续重复改名。

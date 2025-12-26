@@ -113,6 +113,8 @@
   "websocket_connection_failed": "Соединение не установлено. Проверьте, запущен ли клиент.",
   "websocket_zip_stage_message": "Сервис Python создал ZIP-архив по пути { path }",
   "websocket_job_stage_message": "Сервис Python завершил задачу загрузки.",
-  "token_push_waiting_message": "Отправка завершена. Можно закрыть плагин и дождаться завершения загрузки на клиенте."
+  "websocket_retry_failed_files_message": "Повторная загрузка неудачных файлов: { count }...",
+  "token_push_waiting_message": "Отправка завершена. Можно закрыть плагин и дождаться завершения загрузки на клиенте.",
+  "error_temp_download_url_timeout": "Не удалось получить временную ссылку (тайм-аут 10 с). Повторите попытку{ logId }"
 
 }

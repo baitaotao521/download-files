@@ -247,6 +247,11 @@ onMounted(async() => {
         zipProgressText.value = $t('websocket_zip_stage_message', { path })
         return
       }
+      if (payload.stage === 'retry_failed_files') {
+        const count = Number(payload.failed) || 0
+        zipProgressText.value = $t('websocket_retry_failed_files_message', { count })
+        return
+      }
       if (payload.stage === 'job_complete') {
         zipProgressText.value = $t('websocket_job_stage_message')
         return
