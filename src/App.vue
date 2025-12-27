@@ -51,12 +51,19 @@ const refreshForm = () => {
     <div class="forms" v-loading="!isVisible">
       <Form v-if="isVisible" />
     </div>
+    <div class="corner-stat">
+      <img
+        src="https://jc.baitao.ink/p/VR347w7RG"
+        loading="lazy"
+       alt=""/>
+    </div>
   </main>
 </template>
 
 <style scoped lang="scss">
 main {
   padding: 1rem;
+  position: relative;
 }
 .help {
   display: flex;
@@ -85,4 +92,18 @@ main {
   .forms {
     min-height: 300px;
   }
+.corner-stat {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 120px;
+  opacity: 0.28;
+  pointer-events: none;
+  img {
+    width: 100%;
+    display: block;
+    border-radius: 4px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
+  }
+}
 </style>
