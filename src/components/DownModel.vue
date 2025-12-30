@@ -302,7 +302,7 @@ const percent = computed(() => {
   }
 
   // 基于字节的加权进度计算
-  let totalBytes = totalSize.value
+  const totalBytes = totalSize.value
   let downloadedBytes = 0
 
   // 计算已完成文件的字节数

@@ -4,6 +4,7 @@ import EventEmitter from './EventEmitter.js'
 import FileProcessor from './FileProcessor.js'
 import BrowserDownloader from './BrowserDownloader.js'
 import WebSocketDownloader from './WebSocketDownloader.js'
+import UmamiTracker from './UmamiTracker.js'
 
 const $t = i18n.global.t
 
@@ -24,9 +25,15 @@ class DownloadManager {
     this.config = { ...formData }
     this.oTable = null
     this.cellList = []
+    this.startTime = 0
+    this.successCount = 0
+    this.failedCount = 0
 
     // 初始化事件发射器
     this.emitter = new EventEmitter()
+
+    // 初始化 Umami 统计追踪器
+    this.umamiTracker = new UmamiTracker()
 
     // 初始化文件预处理器
     this.fileProcessor = new FileProcessor(this.config, this.emitter)
@@ -40,6 +47,9 @@ class DownloadManager {
       this.fileProcessor,
       this.browserDownloader
     )
+
+    // 绑定下载统计事件
+    this._bindStatisticsEvents()
   }
 
   /**
@@ -47,6 +57,32 @@ class DownloadManager {
    */
   _isWebSocketChannel() {
     return this.config.downloadChannel === 'websocket' || this.config.downloadChannel === 'websocket_auth'
+  }
+
+  /**
+   * 绑定下载统计事件监听
+   */
+  _bindStatisticsEvents() {
+    // 监听下载进度 - 统计成功/失败数量
+    this.emitter.on('progress', (progressInfo) => {
+      if (progressInfo.percentage === 100) {
+        this.successCount++
+      }
+    })
+
+    this.emitter.on('error', () => {
+      this.failedCount++
+    })
+
+    // 监听 ZIP 打包完成
+    this.emitter.on('zip_progress', (payload) => {
+      if (payload && typeof payload === 'object' && payload.stage === 'job_complete') {
+        this.umamiTracker.trackZipProgress({
+          stage: 'complete',
+          fileCount: this.cellList.length
+        })
+      }
+    })
   }
 
   /**
@@ -75,19 +111,71 @@ class DownloadManager {
       return ''
     }
 
+    // 计算总大小
+    const totalSize = this.cellList.reduce((sum, file) => sum + (file.size || 0), 0)
+
+    // 统计用户配置
+    this.umamiTracker.trackUserConfig({
+      fileNameType: this.config.fileNameType,
+      downloadTypeByFolders: this.config.downloadTypeByFolders,
+      attachmentFieldsCount: this.config.attachmentFileds?.length || 0
+    })
+
+    // 统计下载开始
+    this.umamiTracker.trackDownloadStart({
+      downloadChannel: this.config.downloadChannel,
+      downloadType: this.config.downloadType,
+      fileCount: this.cellList.length,
+      totalSize
+    })
+
+    this.startTime = Date.now()
+    this.successCount = 0
+    this.failedCount = 0
+
     try {
       if (this._isWebSocketChannel()) {
         // 桌面端需要稳定的元信息(文件名/路径),维持原有批量预处理逻辑
         await this.fileProcessor.batchPrepareAllFiles(this.cellList, this.oTable)
-        await this.webSocketDownloader.download(this.cellList, this.config, this.oTable)
+
+        // 统计 WebSocket 连接
+        try {
+          await this.webSocketDownloader.download(this.cellList, this.config, this.oTable)
+          this.umamiTracker.trackWebSocketConnection({
+            status: 'success',
+            mode: this.config.downloadChannel === 'websocket_auth' ? 'token' : 'url'
+          })
+        } catch (wsError) {
+          this.umamiTracker.trackWebSocketConnection({
+            status: 'failed',
+            mode: this.config.downloadChannel === 'websocket_auth' ? 'token' : 'url'
+          })
+          throw wsError
+        }
       } else {
         // 浏览器下载:按需准备(改名/分目录/唯一名),做到边获取边下载
         await this.browserDownloader.download(this.cellList, this.config, this.oTable)
       }
+
+      // 统计下载完成
+      const duration = Date.now() - this.startTime
+      this.umamiTracker.trackDownloadComplete({
+        fileCount: this.cellList.length,
+        successCount: this.successCount,
+        failedCount: this.failedCount,
+        duration
+      })
     } catch (error) {
       console.error('download failed', error)
       const message = error?.message || $t('file_download_failed')
       this.emitter.emit('warn', message)
+
+      // 统计下载失败
+      this.umamiTracker.trackDownloadError({
+        type: error?.name || 'unknown',
+        message: error?.message || '未知错误',
+        downloadMode: this.config.downloadChannel
+      })
     } finally {
       this.emitter.emit('finshed')
     }
