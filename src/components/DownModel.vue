@@ -75,6 +75,20 @@
         </el-col>
       </el-row>
 
+      <!-- 速度和时间信息 -->
+      <div class="speed-time-info">
+        <div class="info-item">
+          <el-icon class="info-icon"><Odometer /></el-icon>
+          <span class="info-label">{{ $t('download_speed') }}:</span>
+          <span class="info-value">{{ speedText }}</span>
+        </div>
+        <div class="info-item">
+          <el-icon class="info-icon"><Clock /></el-icon>
+          <span class="info-label">{{ $t('remaining_time') }}:</span>
+          <span class="info-value">{{ remainingTimeText }}</span>
+        </div>
+      </div>
+
       <!-- 状态信息 -->
       <div v-if="maxInfo || zipProgressText" class="status-info">
         <p v-if="maxInfo" class="status-text">{{ maxInfo }}</p>
@@ -148,7 +162,7 @@
 </template>
 <script setup>
 import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
-import { Loading, Download } from '@element-plus/icons-vue'
+import { Loading, Download, Odometer, Clock } from '@element-plus/icons-vue'
 import ProgressCircle from './ProgressCircle.vue'
 import FileDownloader from './downFiles.js'
 import { i18n } from '@/locales/i18n.js'
@@ -169,6 +183,14 @@ const showFailedOnly = ref(false)
 const activeRecords = new Map()
 const visibleActive = ref([])
 const visibleFailed = ref([])
+
+// 下载速度和时间追踪
+const startTime = ref(0)
+const downloadedBytes = ref(0)
+const lastUpdateTime = ref(0)
+const lastDownloadedBytes = ref(0)
+// 所有文件的完整记录 Map<index, {size, percentage}>
+const allFilesMap = new Map()
 
 const props = defineProps({
   zipName: {
@@ -212,6 +234,67 @@ const removeFromFailedDisplay = (index) => {
     visibleFailed.value = filtered
   }
 }
+
+// 格式化时间显示（秒 -> 时分秒）
+const formatTime = (seconds) => {
+  if (!seconds || seconds <= 0 || !isFinite(seconds)) {
+    return '--'
+  }
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+
+  if (h > 0) {
+    return `${h}h ${m}m ${s}s`
+  } else if (m > 0) {
+    return `${m}m ${s}s`
+  } else {
+    return `${s}s`
+  }
+}
+
+// 格式化速度显示
+const formatSpeed = (bytesPerSecond) => {
+  if (!bytesPerSecond || bytesPerSecond <= 0 || !isFinite(bytesPerSecond)) {
+    return '--'
+  }
+  return `${getFileSize(bytesPerSecond)}/s`
+}
+
+// 计算下载速度（字节/秒）
+const downloadSpeed = computed(() => {
+  const now = Date.now()
+  const elapsedSeconds = (now - startTime.value) / 1000
+
+  if (elapsedSeconds <= 0 || downloadedBytes.value <= 0) {
+    return 0
+  }
+
+  return downloadedBytes.value / elapsedSeconds
+})
+
+// 计算剩余时间（秒）
+const remainingTime = computed(() => {
+  const speed = downloadSpeed.value
+
+  if (speed <= 0 || totalSize.value <= 0) {
+    return 0
+  }
+
+  const remainingBytes = totalSize.value - downloadedBytes.value
+
+  if (remainingBytes <= 0) {
+    return 0
+  }
+
+  return remainingBytes / speed
+})
+
+// 格式化的速度文本
+const speedText = computed(() => formatSpeed(downloadSpeed.value))
+
+// 格式化的剩余时间文本
+const remainingTimeText = computed(() => formatTime(remainingTime.value))
 
 const percent = computed(() => {
   if (!totalLength.value || !totalSize.value) {
@@ -270,6 +353,12 @@ onMounted(async() => {
   fileDownloader.on('preding', (cells) => {
     fileCellLength.value += 1
 
+    // 记录下载开始时间
+    if (!startTime.value) {
+      startTime.value = Date.now()
+      lastUpdateTime.value = Date.now()
+    }
+
     if (cells) {
       totalLength.value += cells.length
       cells.forEach((cell) => {
@@ -306,6 +395,18 @@ onMounted(async() => {
     if (!Number.isInteger(index) || completedIds.value.has(index)) {
       return
     }
+
+    // 更新文件记录 Map
+    if (size !== undefined) {
+      const existing = allFilesMap.get(index) || {}
+      allFilesMap.set(index, {
+        ...existing,
+        size: size,
+        percentage: percentage,
+        name: name || existing.name
+      })
+    }
+
     let existing = activeRecords.get(index)
     if (!existing) {
       existing = {
@@ -329,14 +430,31 @@ onMounted(async() => {
     existing.errorMessage = ''
     removeFromFailedDisplay(index)
     failedIds.value.delete(index)
+
     if (percentage >= 100) {
       existing.type = 'success'
       completedIds.value.add(index)
       activeRecords.delete(index)
+      // 更新文件 Map，标记为完成
+      const fileData = allFilesMap.get(index)
+      if (fileData) {
+        allFilesMap.set(index, { ...fileData, percentage: 100 })
+      }
     } else {
       activeRecords.set(index, existing)
     }
     refreshActiveDisplay()
+
+    // 重新计算总下载字节数
+    let totalDownloaded = 0
+    allFilesMap.forEach((fileData) => {
+      const fileSize = fileData.size || 0
+      const filePercentage = fileData.percentage || 0
+      totalDownloaded += fileSize * (filePercentage / 100)
+    })
+
+    downloadedBytes.value = totalDownloaded
+    lastUpdateTime.value = Date.now()
   })
   fileDownloader.on('finshed', (cells) => {
     emit('finsh')
@@ -494,6 +612,41 @@ onMounted(async() => {
       &.stat-info {
         color: var(--el-color-info);
         font-size: 16px;
+      }
+    }
+  }
+
+  .speed-time-info {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background: linear-gradient(135deg, var(--el-fill-color-lighter) 0%, var(--el-fill-color-light) 100%);
+    border-radius: 6px;
+    border: 1px solid var(--el-border-color-lighter);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    .info-item {
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+      color: var(--el-text-color-regular);
+
+      .info-icon {
+        font-size: 16px;
+        margin-right: 6px;
+        color: var(--el-color-primary);
+      }
+
+      .info-label {
+        margin-right: 6px;
+        color: var(--el-text-color-secondary);
+      }
+
+      .info-value {
+        font-weight: 600;
+        color: var(--el-color-primary);
+        margin-left: auto;
       }
     }
   }

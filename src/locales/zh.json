@@ -108,6 +108,8 @@
   "websocket_job_stage_message":"Python 服务已完成下载任务",
   "websocket_retry_failed_files_message":"检测到失败文件，正在自动重试 { count } 个…",
   "token_push_waiting_message":"推送完成，可关闭当前插件，请等待客户端下载成功",
-  "error_temp_download_url_timeout":"获取临时下载链接超时（10秒），请稍后重试{ logId }"
+  "error_temp_download_url_timeout":"获取临时下载链接超时（10秒），请稍后重试{ logId }",
+  "download_speed":"下载速度",
+  "remaining_time":"剩余时间"
 
 }

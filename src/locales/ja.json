@@ -108,5 +108,7 @@
     "websocket_job_stage_message": "Python サービスのダウンロードタスクが完了しました。",
     "websocket_retry_failed_files_message": "失敗したファイル { count } 件を再試行しています...",
     "token_push_waiting_message": "送信が完了しました。プラグインを閉じても構いません。クライアント側の完了をお待ちください。",
-    "error_temp_download_url_timeout": "一時ダウンロードURLの取得がタイムアウトしました（10秒）。再試行してください{ logId }"
+    "error_temp_download_url_timeout": "一時ダウンロードURLの取得がタイムアウトしました（10秒）。再試行してください{ logId }",
+    "download_speed": "ダウンロード速度",
+    "remaining_time": "残り時間"
 }

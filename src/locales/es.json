@@ -108,6 +108,8 @@
   "websocket_job_stage_message": "El servicio de Python terminó la tarea de descarga.",
   "websocket_retry_failed_files_message": "Reintentando { count } archivo(s) fallido(s)...",
   "token_push_waiting_message": "Envío completado. Puedes cerrar el complemento y esperar a que el cliente termine la descarga.",
-  "error_temp_download_url_timeout": "No se pudo obtener la URL de descarga temporal (tiempo de espera 10 s). Reintenta{ logId }"
+  "error_temp_download_url_timeout": "No se pudo obtener la URL de descarga temporal (tiempo de espera 10 s). Reintenta{ logId }",
+  "download_speed": "Velocidad de descarga",
+  "remaining_time": "Tiempo restante"
 
 }

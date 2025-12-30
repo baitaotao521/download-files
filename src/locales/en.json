@@ -108,5 +108,7 @@
   "websocket_job_stage_message": "Python service finished the download job.",
   "websocket_retry_failed_files_message": "Retrying { count } failed file(s)...",
   "token_push_waiting_message": "Push complete. You may close the plugin and wait for the desktop client to finish downloading.",
-  "error_temp_download_url_timeout": "Failed to get temporary download URL (timeout 10s). Please retry{ logId }"
+  "error_temp_download_url_timeout": "Failed to get temporary download URL (timeout 10s). Please retry{ logId }",
+  "download_speed": "Download Speed",
+  "remaining_time": "Remaining Time"
 }
