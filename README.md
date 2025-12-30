@@ -1,5 +1,7 @@
 附件批量下载
 
+使用说明https://p6bgwki4n6.feishu.cn/docx/Pn7Kdw2rPocwPZxVfF5cMsAcnle
+
 ## WebSocket 下载服务
 
 如果在前端插件中选择“WebSocket 推送下载”，需要先在本地启动 Python 服务。
