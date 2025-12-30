@@ -164,7 +164,7 @@
 import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
 import { Loading, Download, Odometer, Clock } from '@element-plus/icons-vue'
 import ProgressCircle from './ProgressCircle.vue'
-import FileDownloader from './downFiles.js'
+import { DownloadManager } from './downloader/index.js'
 import { i18n } from '@/locales/i18n.js'
 import { getFileSize } from '@/utils/index.js'
 const $t = i18n.global.t
@@ -343,7 +343,7 @@ const percent = computed(() => {
 })
 const { formData, zipName } = toRefs(props)
 onMounted(async() => {
-  const fileDownloader = new FileDownloader({
+  const fileDownloader = new DownloadManager({
     ...formData.value,
     zipName: zipName.value
   })
