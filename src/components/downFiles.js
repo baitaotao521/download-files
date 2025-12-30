@@ -20,8 +20,8 @@ const MAX_ZIP_SIZE_NUM = 1
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
 // 浏览器直下：下载并发数需要受控，避免一次性获取过多“临时下载链接”后排队等待导致过期。
 // 经验值：单文件直下并发略高一些；ZIP 打包需要占用内存与 CPU，适当降低并发更稳。
-const BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL = 5
-const BROWSER_DOWNLOAD_CONCURRENCY_ZIP = 3
+const BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL = 50
+const BROWSER_DOWNLOAD_CONCURRENCY_ZIP = 30
 const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
