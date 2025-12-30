@@ -1,24 +1,88 @@
 <template>
   <div class="dialog-process">
-    <h4>{{ $t("download_progress") }}</h4>
+    <h4>
+      <el-icon class="title-icon"><Download /></el-icon>
+      {{ $t("download_progress") }}
+    </h4>
     <div class="dialog-circle">
       <ProgressCircle :percent="percent" />
+      <div class="progress-text">
+        {{ percent }}%
+      </div>
     </div>
+
+    <!-- 警告信息区域 -->
+    <div v-if="totalSize > MAX_SIZE || warnList.length || zipError" class="warning-section">
+      <el-alert
+        v-if="totalSize > MAX_SIZE"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px;"
+      >
+        {{ $t('text7') }}
+      </el-alert>
+      <el-alert
+        v-for="item in warnList"
+        :key="item"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px;"
+      >
+        {{ item }}
+      </el-alert>
+      <el-alert
+        v-if="!!zipError"
+        type="error"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px;"
+      >
+        {{ $t('text11') }}
+      </el-alert>
+    </div>
+
     <h4>{{ $t("download_details") }}</h4>
     <div class="prompt">
-     <p  v-if="totalSize>MAX_SIZE" style="color: var(--el-color-warning);line-height: 1.5;">{{ $t('text7') }}</p>
-     <template v-if="warnList.length">
-      <p v-for="item in warnList" :key="item" style="color: var(--el-color-warning);line-height: 1.5;">{{ item }}</p>
-     </template>
-      <!-- <p>已找到{{ fileCellLength }}个单元格</p> -->
+      <!-- 统计卡片 - 边栏竖向布局 -->
+      <el-row :gutter="8" class="stats-row">
+        <el-col :span="12">
+          <div class="stat-card">
+            <div class="stat-label">{{ $t('text8', { totalLength: '' }).replace(/\d+/, '').trim() }}</div>
+            <div class="stat-value">{{ totalLength }}</div>
+          </div>
+        </el-col>
+        <el-col :span="12">
+          <div class="stat-card">
+            <div class="stat-label">{{ $t('text10', { getCompletedIdsLength: '' }).replace(/\d+/, '').trim() }}</div>
+            <div class="stat-value stat-success">{{ getCompletedIdsLength }}</div>
+          </div>
+        </el-col>
+      </el-row>
+      <el-row :gutter="8" class="stats-row">
+        <el-col :span="12">
+          <div class="stat-card">
+            <div class="stat-label">{{ $t('text21', { failedCount: '' }).replace(/\d+/, '').trim() }}</div>
+            <div class="stat-value stat-danger">{{ getFailedIdsLength }}</div>
+          </div>
+        </el-col>
+        <el-col :span="12">
+          <div class="stat-card">
+            <div class="stat-label">{{ $t('text9', { totalSize: '' }).split(':')[0] }}</div>
+            <div class="stat-value stat-info">{{ getFileSize(totalSize) }}</div>
+          </div>
+        </el-col>
+      </el-row>
 
-      <p> {{ $t('text8',{totalLength}) }}</p>
-      <p> {{ $t('text9',{totalSize:getFileSize(totalSize)})}}</p>
-      <p> {{ $t('text10',{getCompletedIdsLength})}}</p>
-      <p style="color:red" v-if="getFailedIdsLength > 0">{{ $t('text21',{failedCount: getFailedIdsLength})}}</p>
-      <p>{{ maxInfo }}</p>
-      <p>{{ zipProgressText }}</p>
-      <p style="color:red" v-if="!!zipError">{{ $t('text11') }}</p>
+      <!-- 状态信息 -->
+      <div v-if="maxInfo || zipProgressText" class="status-info">
+        <p v-if="maxInfo" class="status-text">{{ maxInfo }}</p>
+        <p v-if="zipProgressText" class="status-text">
+          <el-icon class="status-icon"><Loading /></el-icon>
+          {{ zipProgressText }}
+        </p>
+      </div>
 
       <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 8px;">
         <el-button
@@ -84,6 +148,7 @@
 </template>
 <script setup>
 import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
+import { Loading, Download } from '@element-plus/icons-vue'
 import ProgressCircle from './ProgressCircle.vue'
 import FileDownloader from './downFiles.js'
 import { i18n } from '@/locales/i18n.js'
@@ -149,12 +214,49 @@ const removeFromFailedDisplay = (index) => {
 }
 
 const percent = computed(() => {
-  const finished = getCompletedIdsLength.value + getFailedIdsLength.value
-  if (!totalLength.value) {
+  if (!totalLength.value || !totalSize.value) {
     return 0
   }
-  const val = ((finished / totalLength.value) * 100).toFixed(2) - 0
-  return val || 0
+
+  // 基于字节的加权进度计算
+  let totalBytes = totalSize.value
+  let downloadedBytes = 0
+
+  // 计算已完成文件的字节数
+  const completedSet = completedIds.value
+  const failedSet = failedIds.value
+
+  // 遍历所有活动记录计算进度
+  activeRecords.forEach((record) => {
+    const size = record.size || 0
+    const percentage = record.percentage || 0
+
+    if (completedSet.has(record.index)) {
+      // 已完成的文件
+      downloadedBytes += size
+    } else if (failedSet.has(record.index)) {
+      // 失败的文件不计入下载字节
+      // 但为了总进度不卡住，我们仍然算作"处理完成"
+      downloadedBytes += size
+    } else {
+      // 正在下载的文件，按百分比计算
+      downloadedBytes += size * (percentage / 100)
+    }
+  })
+
+  // 如果没有活动记录，但有完成的文件，使用简单的文件数量计算
+  if (activeRecords.size === 0 && (completedSet.size > 0 || failedSet.size > 0)) {
+    const finished = completedSet.size + failedSet.size
+    const val = ((finished / totalLength.value) * 100).toFixed(2) - 0
+    return val || 0
+  }
+
+  if (totalBytes <= 0) {
+    return 0
+  }
+
+  const val = ((downloadedBytes / totalBytes) * 100).toFixed(2) - 0
+  return Math.min(Math.max(val || 0, 0), 100)
 })
 const { formData, zipName } = toRefs(props)
 onMounted(async() => {
@@ -279,6 +381,14 @@ onMounted(async() => {
     font-size: 16px;
     border-left: 3px solid var(--el-color-primary);
     padding-left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .title-icon {
+      font-size: 18px;
+      color: var(--el-color-primary);
+    }
   }
 
   .dialog-circle {
@@ -289,12 +399,24 @@ onMounted(async() => {
     justify-content: center;
     margin-bottom: 16px;
 
+    .progress-text {
+      position: absolute;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--el-color-primary);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
     .statistic {
       width: 100%;
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
+  }
+
+  .warning-section {
+    margin-bottom: 16px;
   }
 }
 
@@ -309,6 +431,125 @@ onMounted(async() => {
     font-size: 14px;
     margin-bottom: 8px;
   }
+
+  .stats-row {
+    margin-bottom: 8px;
+  }
+
+  .stat-card {
+    background: linear-gradient(135deg, var(--el-bg-color-page) 0%, var(--el-fill-color-lighter) 100%);
+    border-radius: 6px;
+    padding: 10px 8px;
+    text-align: center;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid var(--el-border-color-lighter);
+    position: relative;
+    overflow: hidden;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--el-color-primary), transparent);
+      transform: translateX(-100%);
+      animation: shimmer 2s infinite;
+    }
+
+    &:hover {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      border-color: var(--el-border-color-light);
+      transform: translateY(-2px);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--el-text-color-secondary);
+      margin-bottom: 6px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stat-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--el-text-color-primary);
+      line-height: 1;
+      transition: all 0.3s;
+
+      &.stat-success {
+        color: var(--el-color-success);
+        text-shadow: 0 0 8px rgba(103, 194, 58, 0.3);
+      }
+
+      &.stat-danger {
+        color: var(--el-color-danger);
+        text-shadow: 0 0 8px rgba(245, 108, 108, 0.3);
+      }
+
+      &.stat-info {
+        color: var(--el-color-info);
+        font-size: 16px;
+      }
+    }
+  }
+
+  .status-info {
+    margin-bottom: 12px;
+    padding: 12px;
+    background: linear-gradient(135deg, var(--el-fill-color-light) 0%, var(--el-fill-color) 100%);
+    border-radius: 6px;
+    border-left: 3px solid var(--el-color-primary);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+
+    .status-text {
+      margin: 0;
+      padding: 4px 0;
+      color: var(--el-text-color-primary);
+      font-size: 14px;
+      line-height: 1.5;
+      display: flex;
+      align-items: center;
+
+      .status-icon {
+        margin-right: 8px;
+        animation: rotating 2s linear infinite;
+        color: var(--el-color-primary);
+      }
+    }
+  }
 }
 
+@keyframes rotating {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
 </style>

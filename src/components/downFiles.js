@@ -824,7 +824,16 @@ class FileDownloader {
             return
           }
           if (Number.isInteger(order) && order > 0) {
-            if (status === 'success') {
+            if (status === 'progress') {
+              // Python 端实时进度推送
+              const percentage = data.percentage
+              if (typeof percentage === 'number') {
+                this.emit('progress', {
+                  index: order,
+                  percentage: Math.min(Math.max(percentage, 0), 99)
+                })
+              }
+            } else if (status === 'success') {
               this.emit('progress', {
                 index: order,
                 percentage: 100

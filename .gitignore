@@ -34,3 +34,5 @@ __pycache__/
 
 # Serena workspace state
 .serena/
+/.claude/index.json
+*.md

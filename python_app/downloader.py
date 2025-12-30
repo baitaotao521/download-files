@@ -546,7 +546,9 @@ class DownloadJobState:
             self.http_session,
             str(download_url),
             target_path,
-            file_key=file_key
+            file_key=file_key,
+            websocket=websocket,
+            order=order if isinstance(order, int) else None
           )
         success = True
         break
@@ -966,7 +968,9 @@ class AttachmentDownloader:
     url: str,
     destination: Path,
     *,
-    file_key: str
+    file_key: str,
+    websocket=None,
+    order: Optional[int] = None
   ) -> Path:
     """使用 aiohttp 流式下载文件（支持断点续传，成功后再原子替换）。"""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -999,7 +1003,7 @@ class AttachmentDownloader:
         except OSError:
           logging.debug('failed to cleanup temp file after 416: %s', temp_destination)
         self._monitor_file_downloaded(file_key, 0)
-        return await self._download_file(session, url, destination, file_key=file_key)
+        return await self._download_file(session, url, destination, file_key=file_key, websocket=websocket, order=order)
 
       response.raise_for_status()
 
@@ -1018,16 +1022,40 @@ class AttachmentDownloader:
           except OSError:
             logging.debug('failed to cleanup temp file after range mismatch: %s', temp_destination)
           self._monitor_file_downloaded(file_key, 0)
-          return await self._download_file(session, url, destination, file_key=file_key)
+          return await self._download_file(session, url, destination, file_key=file_key, websocket=websocket, order=order)
         write_mode = 'ab'
       elif resume_from > 0 and response.status == 200:
         # 服务端不支持 Range 时会返回 200，此时需要从头下载并重置进度。
         self._monitor_file_downloaded(file_key, 0)
 
+      # 获取文件总大小用于进度计算
+      content_length = response.headers.get('Content-Length')
+      total_size = int(content_length) if content_length else 0
+      downloaded = resume_from
+      last_report_time = time.time()
+      report_interval = 0.5  # 每 500ms 上报一次进度
+
       with temp_destination.open(write_mode) as file_obj:
         async for chunk in response.content.iter_chunked(128 * 1024):
           file_obj.write(chunk)
-          self._monitor_file_progress(file_key, len(chunk))
+          chunk_size = len(chunk)
+          downloaded += chunk_size
+          self._monitor_file_progress(file_key, chunk_size)
+
+          # 定期向前端推送实时进度
+          current_time = time.time()
+          if websocket is not None and order is not None and current_time - last_report_time >= report_interval:
+            if total_size > 0:
+              percentage = min(int((downloaded / total_size) * 100), 99)
+              await self._send_ack(
+                websocket,
+                status='progress',
+                message='downloading',
+                order=order,
+                extra={'percentage': percentage}
+              )
+            last_report_time = current_time
+
       temp_destination.replace(destination)
     logging.info('saved file to %s', destination)
     return destination
