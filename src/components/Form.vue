@@ -453,7 +453,7 @@ import { compareSemanticVersions } from '@/utils/index.js'
 const $t = i18n.global.t
 const desktopUsageGuideUrl =
   'https://p6bgwki4n6.feishu.cn/docx/Pn7Kdw2rPocwPZxVfF5cMsAcnle#share-P1DidKxwIoVRO9xruLecXk4snLV'
-const MIN_DESKTOP_CLIENT_VERSION = '1.1.5'
+const MIN_DESKTOP_CLIENT_VERSION = '1.1.8'
 const DESKTOP_CLIENT_UPDATE_URL =
   'https://xcnfciyevzhz.feishu.cn/wiki/J9bdwozIViVC4ZkOuKAcSbAQnKQ'
 const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
