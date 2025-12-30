@@ -56,6 +56,10 @@ python scripts/ws_desktop.py
 1. 确保执行 `pip install -r scripts/requirements.txt` 安装 `baseopensdk` 及 `python-dotenv`，并在 `.env` 或桌面程序的高级设置中填入 `PERSONAL_BASE_TOKEN`。
 2. 前端选择该下载方式后，会自动携带当前 Base 的 `appToken` 与数据表 ID。若桌面端未配置授权码，将返回明确错误并拒绝执行下载。
 
+### 浏览器直接下载模式说明
+
+浏览器直接下载会在“真正开始下载某个文件”时才向飞书请求该文件的临时下载链接，并限制并发（单文件直下默认 5，ZIP 打包默认 3），避免一次性预取大量临时链接后因浏览器连接排队导致链接过期。
+
 ---
 
 插件在下载过程中会按以下顺序向 Python 服务推送 JSON：

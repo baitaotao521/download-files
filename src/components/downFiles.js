@@ -18,8 +18,10 @@ const $t = i18n.global.t
 const MAX_ZIP_SIZE_NUM = 1
 
 const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
-// 下载工作线程并发数（普通模式不限制）。
-const DOWNLOAD_WORKER_CONCURRENCY = Number.POSITIVE_INFINITY
+// 浏览器直下：下载并发数需要受控，避免一次性获取过多“临时下载链接”后排队等待导致过期。
+// 经验值：单文件直下并发略高一些；ZIP 打包需要占用内存与 CPU，适当降低并发更稳。
+const BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL = 5
+const BROWSER_DOWNLOAD_CONCURRENCY_ZIP = 3
 const WEBSOCKET_LINK_TYPE = 'feishu_attachment_link'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const WEBSOCKET_COMPLETE_TYPE = 'feishu_attachment_complete'
@@ -235,7 +237,7 @@ class FileDownloader {
   /**
    * 以有限并发运行任务，避免一次性占满资源。
    */
-  async runWithConcurrency(list, worker, concurrency = DOWNLOAD_WORKER_CONCURRENCY) {
+  async runWithConcurrency(list, worker, concurrency = BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL) {
     const source = Array.isArray(list) ? list : []
     if (!source.length) return
     const limit = Math.max(1, Math.min(concurrency, source.length))
@@ -271,7 +273,8 @@ class FileDownloader {
       this.zip = new JSZip()
       await this.runWithConcurrency(
         zipList,
-        (fileInfo) => this.processFile(fileInfo)
+        (fileInfo) => this.processFile(fileInfo),
+        BROWSER_DOWNLOAD_CONCURRENCY_ZIP
       )
       const [err, content] = await to(this.zip.generateAsync(
         { type: 'blob' },
@@ -381,7 +384,8 @@ class FileDownloader {
       cellList,
       async(fileInfo) => {
         await downLocal(fileInfo)
-      }
+      },
+      BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL
     )
   }
   /**

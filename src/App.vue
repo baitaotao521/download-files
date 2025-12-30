@@ -51,12 +51,6 @@ const refreshForm = () => {
     <div class="forms" v-loading="!isVisible">
       <Form v-if="isVisible" />
     </div>
-    <div class="corner-stat">
-      <img
-        src="https://jc.baitao.ink/p/VR347w7RG"
-        loading="lazy"
-       alt=""/>
-    </div>
   </main>
 </template>
 
