@@ -42,6 +42,9 @@ class FileDownloader {
     this.nameSpace = new Set()
     this.zip = null
     this.cellList = []
+
+    // 缓存 recordId + fieldId 对应的字符串，减少重复拉取造成的等待。
+    this.cellStringCache = new Map()
   }
   /**
    * 判断当前是否需要通过 WebSocket 推送文件链接。
@@ -150,27 +153,122 @@ class FileDownloader {
       listener(messgae)
     })
   }
+
+  /**
+   * 判断当前是否支持文件夹分类（ZIP 或桌面端下载）。
+   */
+  _supportsFolderClassification() {
+    return this.isWebSocketChannel() || this.downloadType === 1
+  }
+
+  /**
+   * 获取单元格字符串（带缓存），避免重复请求导致等待时间变长。
+   */
+  async _getCellStringCached(fieldId, recordId) {
+    const cacheKey = `${recordId}::${fieldId}`
+    if (this.cellStringCache.has(cacheKey)) {
+      return this.cellStringCache.get(cacheKey)
+    }
+    const value = await this.oTable.getCellString(fieldId, recordId)
+    this.cellStringCache.set(cacheKey, value)
+    return value
+  }
+
+  /**
+   * 确保当前文件的文件夹路径已就绪（按需计算）。
+   */
+  async _ensureFolderPathReady(fileInfo) {
+    if (!fileInfo || fileInfo.__folderPathReady) {
+      return
+    }
+
+    if (!this._supportsFolderClassification() || !this.downloadTypeByFolders) {
+      fileInfo.path = fileInfo.path || ''
+      fileInfo.__folderPathReady = true
+      return
+    }
+
+    const getProcessedFolderName = async(fieldKey) => {
+      const rawValue = await this._getCellStringCached(fieldKey, fileInfo.recordId)
+      return removeSpecialChars(getFolderName(rawValue)) || $t('uncategorized')
+    }
+
+    let parentFolder = ''
+    if (this.firstFolderKey) {
+      parentFolder += `${await getProcessedFolderName(this.firstFolderKey)}/`
+    }
+    if (this.secondFolderKey) {
+      parentFolder += `${await getProcessedFolderName(this.secondFolderKey)}/`
+    }
+
+    fileInfo.path = parentFolder
+    fileInfo.__folderPathReady = true
+  }
+
+  /**
+   * 确保当前文件的自定义命名已就绪（按需计算）。
+   */
+  async _ensureCustomFileNameReady(fileInfo) {
+    if (!fileInfo || fileInfo.__customNameReady) {
+      return
+    }
+
+    if (this.fileNameType !== 1) {
+      fileInfo.__customNameReady = true
+      return
+    }
+
+    const targetFieldIds = Array.isArray(this.fileNameByField) ? this.fileNameByField : []
+    if (!targetFieldIds.length) {
+      fileInfo.__customNameReady = true
+      return
+    }
+
+    const parts = await Promise.all(
+      targetFieldIds.map((fieldId) =>
+        this._getCellStringCached(fieldId, fileInfo.recordId)
+      )
+    )
+    const mergedName = parts.filter((name) => name).join(this.nameMark)
+
+    const replaced = replaceFileName(fileInfo.name, mergedName, $t('undefined'))
+    fileInfo.name = removeSpecialChars(replaced)
+    fileInfo.__customNameReady = true
+  }
+
+  /**
+   * 按需准备文件元信息：路径、改名、唯一名。
+   * 目标：避免“先把全部临时链接/元信息算完才开始下载”，改为边准备边下载。
+   */
+  async _prepareFileInfoForDownload(fileInfo) {
+    if (!fileInfo) {
+      return
+    }
+    await this._ensureFolderPathReady(fileInfo)
+    await this._ensureCustomFileNameReady(fileInfo)
+    this._prepareUniqueFileName(fileInfo)
+  }
   /**
    * 按照字段规则批量重命名附件。
    */
   async setFileNames() {
     if (this.fileNameType !== 1) return
-    const targetFieldIds = this.fileNameByField
+    const targetFieldIds = Array.isArray(this.fileNameByField) ? this.fileNameByField : []
+
     const getFileName = async(cell, fieldIds) => {
       const names = await Promise.all(
-        fieldIds.map(fieldId =>
-          this.oTable.getCellString(fieldId, cell.recordId)
+        fieldIds.map((fieldId) =>
+          this._getCellStringCached(fieldId, cell.recordId)
         )
       )
       // 过滤掉空字符串，并用 '-' 连接剩余的名称部分
-      return names.filter(name => name).join(this.nameMark)
+      return names.filter((name) => name).join(this.nameMark)
     }
 
     const updateCellNames = (cell, newName) => {
-      if (newName !== cell.name) {
-        const cName = replaceFileName(cell.name, newName, $t('undefined'))
-        cell.name = removeSpecialChars(cName)
-      }
+      const cName = replaceFileName(cell.name, newName, $t('undefined'))
+      cell.name = removeSpecialChars(cName)
+      cell.__customNameReady = true
     }
 
     // 使用 map 创建一个包含所有异步操作的数组
@@ -190,15 +288,13 @@ class FileDownloader {
    * 设置附件的目录路径（一级/二级目录）。
    */
   async setFolderPath() {
-    const supportsFolderClassification = this.isWebSocketChannel() || this.downloadType === 1
-
     // 不支持文件夹分类的模式直接跳过（浏览器逐个下载无法落地文件夹）。
-    if (!supportsFolderClassification) return
+    if (!this._supportsFolderClassification()) return
     if (!this.downloadTypeByFolders) return
 
     // 封装获取和处理文件夹名称的逻辑
     const getProcessedFolderName = async(fieldKey, recordId) => {
-      const name = await this.oTable.getCellString(fieldKey, recordId)
+      const name = await this._getCellStringCached(fieldKey, recordId)
       return removeSpecialChars(getFolderName(name)) || $t('uncategorized')
     }
 
@@ -211,6 +307,7 @@ class FileDownloader {
         parentFolder += `${await getProcessedFolderName(secondFolderKey, cell.recordId)}/`
       }
       cell.path = parentFolder
+      cell.__folderPathReady = true
     }
 
     // 使用 Promise.all 处理所有单元格的文件夹名称设置
@@ -298,15 +395,13 @@ class FileDownloader {
    * 获取附件直链并应用唯一文件名。
    */
   async getAttachmentUrl(fileInfo) {
+    await this._prepareFileInfoForDownload(fileInfo)
+
     if (fileInfo.fileUrl) {
       return fileInfo.fileUrl
     }
-    const { token, fieldId, recordId, path, name } = fileInfo
+    const { token, fieldId, recordId } = fileInfo
 
-    if (!fileInfo.__uniqueNameReady) {
-      fileInfo.name = this.getUniqueFileName(name, path)
-      fileInfo.__uniqueNameReady = true
-    }
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     const isTimeoutError = (error) => {
       const code = error?.code
@@ -834,6 +929,8 @@ class FileDownloader {
    * 下载单个文件并上报进度（包含重试兜底，避免临时链接失效或网络抖动导致失败）。
    */
   async downloadFile(fileInfo) {
+    await this._prepareFileInfoForDownload(fileInfo)
+
     const { name, order, size } = fileInfo
     const maxAttempts = 3
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -922,9 +1019,6 @@ class FileDownloader {
     this.oTable = await bitable.base.getTableById(this.tableId)
     // 获取所有附件信息
     this.cellList = await this.getCellsList()
-    //  为所有附件重新取名
-    await this.setFileNames()
-    await this.setFolderPath()
 
     if (!this.cellList.length) {
       this.emit('info', $t('no_files_to_download_message'))
@@ -933,8 +1027,12 @@ class FileDownloader {
     }
     try {
       if (this.isWebSocketChannel()) {
+        // 桌面端需要稳定的元信息（文件名/路径），维持原有批量预处理逻辑。
+        await this.setFileNames()
+        await this.setFolderPath()
         await this._downloadViaDesktop()
       } else {
+        // 浏览器下载：按需准备（改名/分目录/唯一名），做到边获取边下载。
         await this._downloadViaBrowser()
       }
     } catch (error) {
