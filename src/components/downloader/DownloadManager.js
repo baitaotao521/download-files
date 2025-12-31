@@ -187,6 +187,7 @@ class DownloadManager {
   destroy() {
     this.emitter.clear()
     this.fileProcessor.clearCache()
+    this.browserDownloader.destroy()
     this.cellList = []
     this.oTable = null
   }

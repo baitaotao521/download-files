@@ -4,6 +4,8 @@ import axios from 'axios'
 import to from 'await-to-js'
 import { chunkArrayByMaxSize } from '@/utils/index.js'
 import { i18n } from '@/locales/i18n.js'
+import ProgressThrottler from './ProgressThrottler.js'
+import FailureManager from './FailureManager.js'
 
 const $t = i18n.global.t
 
@@ -13,6 +15,8 @@ const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
 // 经验值:单文件直下并发略高一些;ZIP 打包需要占用内存与 CPU,适当降低并发更稳
 const BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL = 50
 const BROWSER_DOWNLOAD_CONCURRENCY_ZIP = 30
+// 进度更新节流间隔(毫秒)
+const PROGRESS_THROTTLE_INTERVAL = 150
 
 /**
  * 浏览器直接下载器
@@ -21,12 +25,21 @@ const BROWSER_DOWNLOAD_CONCURRENCY_ZIP = 30
  * - ZIP 打包下载
  * - 获取附件临时链接
  * - 并发控制
+ * - 失败文件管理与重试
+ * - 内存管理优化
  */
 class BrowserDownloader {
   constructor(emitter, fileProcessor) {
     this.emitter = emitter
     this.fileProcessor = fileProcessor
     this.zip = null
+
+    // 初始化辅助模块
+    this.progressThrottler = new ProgressThrottler(emitter, PROGRESS_THROTTLE_INTERVAL)
+    this.failureManager = new FailureManager(emitter)
+
+    // ObjectURL 管理,防止内存泄漏
+    this.objectUrls = new Set()
   }
 
   /**
@@ -111,12 +124,9 @@ class BrowserDownloader {
     const { name, order, size } = fileInfo
     const maxAttempts = 3
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-    const shouldRefreshUrl = (status) => {
-      const code = Number(status)
-      return [400, 401, 403, 404, 410].includes(code)
-    }
 
-    this.emitter.emit('progress', {
+    // 初始进度上报
+    this.progressThrottler.updateProgress({
       index: order,
       name,
       size,
@@ -127,13 +137,16 @@ class BrowserDownloader {
       try {
         await this.getAttachmentUrl(fileInfo, oTable)
       } catch (error) {
-        if (shouldRefreshUrl(error?.response?.status)) {
+        const errorType = this.failureManager.classifyError(error)
+        if (this.failureManager.shouldRefreshUrl(errorType, error?.response?.status)) {
           fileInfo.fileUrl = null
         }
         if (attempt < maxAttempts) {
           await sleep(300 * attempt)
           continue
         }
+        // 记录失败
+        this.failureManager.recordFailure(fileInfo, error, attempt)
         this.emitter.emit('error', {
           message: error?.message || $t('file_download_failed'),
           index: order
@@ -155,7 +168,9 @@ class BrowserDownloader {
               )
               // 避免提前上报 100% 导致 UI 误判"已完成"
               const safePercentage = Math.min(Math.max(percentage, 0), 99)
-              this.emitter.emit('progress', {
+
+              // 使用节流更新进度
+              this.progressThrottler.updateProgress({
                 index: order,
                 percentage: safePercentage
               })
@@ -166,20 +181,38 @@ class BrowserDownloader {
       completed = true
 
       if (!err) {
-        this.emitter.emit('progress', {
+        const blob = response.data
+
+        // 文件完整性验证
+        if (size > 0 && blob.size !== size) {
+          console.warn(`文件 ${name} 大小不匹配: 预期 ${size}, 实际 ${blob.size}`)
+          // 如果差异小于 1KB,可能是编码问题,仍然接受
+          if (Math.abs(blob.size - size) > 1024 && attempt < maxAttempts) {
+            await sleep(300 * attempt)
+            continue
+          }
+        }
+
+        // 上报 100% 进度(不节流)
+        this.progressThrottler.updateProgress({
           index: order,
           percentage: 100
         })
-        return response.data
+
+        return blob
       }
 
-      if (shouldRefreshUrl(err?.response?.status)) {
+      const errorType = this.failureManager.classifyError(err)
+      if (this.failureManager.shouldRefreshUrl(errorType, err?.response?.status)) {
         fileInfo.fileUrl = null
       }
       if (attempt < maxAttempts) {
         await sleep(300 * attempt)
         continue
       }
+
+      // 记录失败
+      this.failureManager.recordFailure(fileInfo, err, attempt)
       this.emitter.emit('error', {
         message: err?.message || $t('file_download_failed'),
         index: order
@@ -219,6 +252,7 @@ class BrowserDownloader {
         (fileInfo) => this.processFile(fileInfo, oTable),
         BROWSER_DOWNLOAD_CONCURRENCY_ZIP
       )
+
       const [err, content] = await to(this.zip.generateAsync(
         { type: 'blob' },
         (metadata) => {
@@ -226,16 +260,30 @@ class BrowserDownloader {
           this.emitter.emit('zip_progress', percent)
         }
       ))
+
       if (err) {
         this.emitter.emit('max_size_warning')
       } else {
         saveAs(content, `${zipName}.zip`)
-        this.zip = null // 释放 zip 实例
+        // 及时释放 Blob 内存
+        setTimeout(() => {
+          if (content && typeof content.close === 'function') {
+            content.close()
+          }
+        }, 1000)
       }
+
+      // 释放 zip 实例
+      this.zip = null
     }
+
+    // 处理超大文件(单独下载)
     for (const fileInfo of maxChunksList) {
       await this.sigleDownLoad([fileInfo], oTable)
     }
+
+    // 刷新剩余的进度更新
+    this.progressThrottler.flush()
   }
 
   /**
@@ -246,13 +294,21 @@ class BrowserDownloader {
       const blob = await this.downloadFile(fileInfo, oTable)
       if (blob) {
         const objectUrl = URL.createObjectURL(blob)
+        this.objectUrls.add(objectUrl) // 记录 ObjectURL
+
         const a = document.createElement('a')
         a.setAttribute('href', objectUrl)
         a.setAttribute('download', fileInfo.name)
         a.click()
-        URL.revokeObjectURL(objectUrl)
+
+        // 延迟释放 ObjectURL,确保下载已触发
+        setTimeout(() => {
+          URL.revokeObjectURL(objectUrl)
+          this.objectUrls.delete(objectUrl)
+        }, 100)
       }
     }
+
     await this.runWithConcurrency(
       cellList,
       async(fileInfo) => {
@@ -260,6 +316,9 @@ class BrowserDownloader {
       },
       BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL
     )
+
+    // 刷新剩余的进度更新
+    this.progressThrottler.flush()
   }
 
   /**
@@ -271,6 +330,38 @@ class BrowserDownloader {
       return
     }
     await this.zipDownLoad(cellList, config.zipName, oTable)
+  }
+
+  /**
+   * 获取失败文件列表
+   */
+  getFailedFiles() {
+    return this.failureManager.getFailedFiles()
+  }
+
+  /**
+   * 获取失败统计
+   */
+  getFailureStats() {
+    return this.failureManager.getFailureStats()
+  }
+
+  /**
+   * 清理资源,防止内存泄漏
+   */
+  destroy() {
+    // 清理所有未释放的 ObjectURL
+    for (const url of this.objectUrls) {
+      URL.revokeObjectURL(url)
+    }
+    this.objectUrls.clear()
+
+    // 销毁辅助模块
+    this.progressThrottler.destroy()
+    this.failureManager.clear()
+
+    // 释放 ZIP 实例
+    this.zip = null
   }
 }
 
