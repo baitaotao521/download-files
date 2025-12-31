@@ -425,6 +425,7 @@
         v-if="downModelVis"
         :formData="formData"
         @finsh="datas.finshDownload = true"
+        @cancel="downModelVis = false"
         :zipName="activeTableInfo.tableName"
       />
       <template #footer v-if="datas.finshDownload">

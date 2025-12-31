@@ -110,6 +110,16 @@
   "token_push_waiting_message":"推送完成，可关闭当前插件，请等待客户端下载成功",
   "error_temp_download_url_timeout":"获取临时下载链接超时（10秒），请稍后重试{ logId }",
   "download_speed":"下载速度",
-  "remaining_time":"剩余时间"
+  "remaining_time":"剩余时间",
+  "cancel_download":"取消下载",
+  "confirm_cancel":"确认取消",
+  "cancel_download_tip":"确定要取消当前下载任务吗？",
+  "download_cancelled":"下载已取消",
+  "failure_stats":"失败统计",
+  "failure_network":"网络错误",
+  "failure_auth":"授权错误",
+  "failure_expired_url":"链接过期",
+  "failure_server":"服务器错误",
+  "failure_unknown":"未知错误"
 
 }

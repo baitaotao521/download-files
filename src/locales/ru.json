@@ -110,6 +110,16 @@
   "token_push_waiting_message": "Отправка завершена. Можно закрыть плагин и дождаться завершения загрузки на клиенте.",
   "error_temp_download_url_timeout": "Не удалось получить временную ссылку (тайм-аут 10 с). Повторите попытку{ logId }",
   "download_speed": "Скорость загрузки",
-  "remaining_time": "Осталось времени"
+  "remaining_time": "Осталось времени",
+  "cancel_download": "Отменить загрузку",
+  "confirm_cancel": "Подтвердить отмену",
+  "cancel_download_tip": "Вы уверены, что хотите отменить текущую задачу загрузки?",
+  "download_cancelled": "Загрузка отменена",
+  "failure_stats": "Статистика ошибок",
+  "failure_network": "Сетевая ошибка",
+  "failure_auth": "Ошибка авторизации",
+  "failure_expired_url": "Ссылка истекла",
+  "failure_server": "Ошибка сервера",
+  "failure_unknown": "Неизвестная ошибка"
 
 }

@@ -110,6 +110,16 @@
   "token_push_waiting_message": "推送完成，可關閉外掛，請等待客戶端下載成功",
   "error_temp_download_url_timeout": "取得臨時下載連結逾時（10 秒），請稍後重試{ logId }",
   "download_speed": "下載速度",
-  "remaining_time": "剩餘時間"
+  "remaining_time": "剩餘時間",
+  "cancel_download": "取消下載",
+  "confirm_cancel": "確認取消",
+  "cancel_download_tip": "確定要取消目前的下載任務嗎？",
+  "download_cancelled": "下載已取消",
+  "failure_stats": "失敗統計",
+  "failure_network": "網路錯誤",
+  "failure_auth": "授權錯誤",
+  "failure_expired_url": "連結過期",
+  "failure_server": "伺服器錯誤",
+  "failure_unknown": "未知錯誤"
 
 }

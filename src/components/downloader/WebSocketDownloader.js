@@ -463,6 +463,30 @@ class WebSocketDownloader {
       }
     }
   }
+
+  /**
+   * 获取失败文件统计
+   * WebSocket 模式下失败由服务端处理,前端返回空统计
+   */
+  getFailureStats() {
+    // WebSocket 模式下可能会回退到 browserDownloader 刷新链接
+    // 所以也可以返回 browserDownloader 的统计
+    if (this.browserDownloader && typeof this.browserDownloader.getFailureStats === 'function') {
+      return this.browserDownloader.getFailureStats()
+    }
+
+    // 返回空统计
+    return {
+      total: 0,
+      byType: {
+        network: 0,
+        auth: 0,
+        expired_url: 0,
+        server: 0,
+        unknown: 0
+      }
+    }
+  }
 }
 
 export default WebSocketDownloader

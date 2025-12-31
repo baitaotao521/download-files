@@ -28,6 +28,9 @@ class DownloadManager {
     this.startTime = 0
     this.successCount = 0
     this.failedCount = 0
+    this.isCancelled = false
+    this.cancelReason = ''
+    this.isDownloading = false
 
     // 初始化事件发射器
     this.emitter = new EventEmitter()
@@ -132,6 +135,12 @@ class DownloadManager {
     this.startTime = Date.now()
     this.successCount = 0
     this.failedCount = 0
+    this.isCancelled = false
+    this.cancelReason = ''
+    this.isDownloading = true
+
+    // 重置下载器的取消状态
+    this.browserDownloader.isCancelled = false
 
     try {
       if (this._isWebSocketChannel()) {
@@ -157,18 +166,56 @@ class DownloadManager {
         await this.browserDownloader.download(this.cellList, this.config, this.oTable)
       }
 
-      // 统计下载完成
+      // 获取失败文件统计
+      const failureStats = this._isWebSocketChannel()
+        ? this.webSocketDownloader.getFailureStats()
+        : this.browserDownloader.getFailureStats()
+
+      // 检查是否被用户取消
+      if (this.isCancelled && this.cancelReason === 'user_manual_cancel') {
+        // 统计用户取消
+        const duration = Date.now() - this.startTime
+        this.umamiTracker.trackDownloadCancel({
+          reason: this.cancelReason,
+          fileCount: this.cellList.length,
+          successCount: this.successCount,
+          failedCount: this.failedCount,
+          duration
+        })
+      } else {
+        // 统计正常下载完成
+        const duration = Date.now() - this.startTime
+        this.umamiTracker.trackDownloadComplete({
+          fileCount: this.cellList.length,
+          successCount: this.successCount,
+          failedCount: this.failedCount,
+          duration,
+          isCancelled: this.isCancelled,
+          failureStats
+        })
+      }
+    } catch (error) {
+      console.error('download failed', error)
+      const message = error?.message || $t('file_download_failed')
+      this.emitter.emit('warn', message)
+
+      // 细化取消原因
+      if (!this.isCancelled) {
+        this.isCancelled = true
+        // 根据错误类型细化原因
+        const errorType = this._classifyErrorType(error)
+        this.cancelReason = errorType
+      }
+
+      // 统计下载取消
       const duration = Date.now() - this.startTime
-      this.umamiTracker.trackDownloadComplete({
+      this.umamiTracker.trackDownloadCancel({
+        reason: this.cancelReason,
         fileCount: this.cellList.length,
         successCount: this.successCount,
         failedCount: this.failedCount,
         duration
       })
-    } catch (error) {
-      console.error('download failed', error)
-      const message = error?.message || $t('file_download_failed')
-      this.emitter.emit('warn', message)
 
       // 统计下载失败
       this.umamiTracker.trackDownloadError({
@@ -177,7 +224,70 @@ class DownloadManager {
         downloadMode: this.config.downloadChannel
       })
     } finally {
+      this.isDownloading = false
       this.emitter.emit('finshed')
+    }
+  }
+
+  /**
+   * 分类错误类型
+   */
+  _classifyErrorType(error) {
+    const status = error?.response?.status
+    const message = error?.message || ''
+
+    // 网络错误
+    if (error?.code === 'ECONNABORTED' || message.toLowerCase().includes('timeout')) {
+      return 'network_error'
+    }
+    if (message.toLowerCase().includes('network') || message.toLowerCase().includes('websocket')) {
+      return 'network_error'
+    }
+
+    // 授权错误
+    if (status === 401 || status === 403 || message.includes('授权') || message.includes('auth')) {
+      return 'auth_error'
+    }
+
+    // 服务器错误
+    if (status >= 500) {
+      return 'server_error'
+    }
+
+    // 默认未知错误
+    return 'unknown_error'
+  }
+
+  /**
+   * 用户主动取消下载
+   */
+  cancelDownload() {
+    if (!this.isDownloading) {
+      return
+    }
+
+    this.isCancelled = true
+    this.cancelReason = 'user_manual_cancel'
+
+    // 发出取消信号
+    this.emitter.emit('cancelled')
+  }
+
+  /**
+   * 获取当前下载统计信息
+   */
+  getDownloadStats() {
+    const failureStats = this._isWebSocketChannel()
+      ? this.webSocketDownloader.getFailureStats()
+      : this.browserDownloader.getFailureStats()
+
+    return {
+      total: this.cellList.length,
+      success: this.successCount,
+      failed: this.failedCount,
+      failureStats,
+      isCancelled: this.isCancelled,
+      isDownloading: this.isDownloading
     }
   }
 

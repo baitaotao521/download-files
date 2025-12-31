@@ -44,15 +44,27 @@ class UmamiTracker {
   trackDownloadComplete(result = {}) {
     if (!this.isEnabled) return
 
-    const { fileCount, successCount, failedCount, duration } = result
+    const { fileCount, successCount, failedCount, duration, isCancelled, failureStats } = result
 
-    window.umami.track('download_complete', {
+    const eventData = {
       file_count: fileCount || 0,
       success_count: successCount || 0,
       failed_count: failedCount || 0,
       duration_seconds: duration ? Math.round(duration / 1000) : 0,
-      success_rate: fileCount ? ((successCount / fileCount) * 100).toFixed(2) : 0
-    })
+      success_rate: fileCount ? ((successCount / fileCount) * 100).toFixed(2) : 0,
+      is_cancelled: Boolean(isCancelled)
+    }
+
+    // 添加失败原因统计
+    if (failureStats && failureStats.byType) {
+      eventData.failure_network = failureStats.byType.network || 0
+      eventData.failure_auth = failureStats.byType.auth || 0
+      eventData.failure_expired_url = failureStats.byType.expired_url || 0
+      eventData.failure_server = failureStats.byType.server || 0
+      eventData.failure_unknown = failureStats.byType.unknown || 0
+    }
+
+    window.umami.track('download_complete', eventData)
   }
 
   /**
@@ -66,6 +78,24 @@ class UmamiTracker {
       error_type: error.type || 'unknown',
       error_message: error.message || '未知错误',
       download_mode: error.downloadMode || 'unknown'
+    })
+  }
+
+  /**
+   * 追踪下载取消事件
+   * @param {Object} cancelInfo - 取消信息
+   */
+  trackDownloadCancel(cancelInfo = {}) {
+    if (!this.isEnabled) return
+
+    const { reason, fileCount, successCount, failedCount, duration } = cancelInfo
+
+    window.umami.track('download_cancel', {
+      cancel_reason: reason || 'user_cancel',
+      file_count: fileCount || 0,
+      success_count: successCount || 0,
+      failed_count: failedCount || 0,
+      duration_seconds: duration ? Math.round(duration / 1000) : 0
     })
   }
 

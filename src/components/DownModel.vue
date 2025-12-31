@@ -89,6 +89,36 @@
         </div>
       </div>
 
+      <!-- 失败统计信息 -->
+      <div v-if="showFailureStats" class="failure-stats-info">
+        <div class="failure-stats-header">
+          <el-icon class="stats-icon"><Warning /></el-icon>
+          <span class="stats-title">{{ $t('failure_stats') }}</span>
+        </div>
+        <div class="failure-stats-grid">
+          <div v-if="failureStats.byType.network > 0" class="failure-item">
+            <span class="failure-label">{{ $t('failure_network') }}:</span>
+            <span class="failure-value">{{ failureStats.byType.network }}</span>
+          </div>
+          <div v-if="failureStats.byType.auth > 0" class="failure-item">
+            <span class="failure-label">{{ $t('failure_auth') }}:</span>
+            <span class="failure-value">{{ failureStats.byType.auth }}</span>
+          </div>
+          <div v-if="failureStats.byType.expired_url > 0" class="failure-item">
+            <span class="failure-label">{{ $t('failure_expired_url') }}:</span>
+            <span class="failure-value">{{ failureStats.byType.expired_url }}</span>
+          </div>
+          <div v-if="failureStats.byType.server > 0" class="failure-item">
+            <span class="failure-label">{{ $t('failure_server') }}:</span>
+            <span class="failure-value">{{ failureStats.byType.server }}</span>
+          </div>
+          <div v-if="failureStats.byType.unknown > 0" class="failure-item">
+            <span class="failure-label">{{ $t('failure_unknown') }}:</span>
+            <span class="failure-value">{{ failureStats.byType.unknown }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- 状态信息 -->
       <div v-if="maxInfo || zipProgressText" class="status-info">
         <p v-if="maxInfo" class="status-text">{{ maxInfo }}</p>
@@ -98,7 +128,15 @@
         </p>
       </div>
 
-      <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 8px;">
+      <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 8px; gap: 8px;">
+        <el-button
+          v-if="isDownloading && !isCancelled"
+          size="small"
+          type="danger"
+          @click="handleCancelDownload"
+        >
+          {{ $t('cancel_download') }}
+        </el-button>
         <el-button
           v-if="getFailedIdsLength > 0"
           size="small"
@@ -162,13 +200,14 @@
 </template>
 <script setup>
 import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
-import { Loading, Download, Odometer, Clock } from '@element-plus/icons-vue'
+import { Loading, Download, Odometer, Clock, Warning } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
 import ProgressCircle from './ProgressCircle.vue'
 import { DownloadManager } from './downloader/index.js'
 import { i18n } from '@/locales/i18n.js'
 import { getFileSize } from '@/utils/index.js'
 const $t = i18n.global.t
-const emit = defineEmits(['finsh'])
+const emit = defineEmits(['finsh', 'cancel'])
 const MAX_SIZE = 1073741824 * 1 // 1G
 const warnList = ref([])
 const completedIds = ref(new Set())
@@ -183,6 +222,21 @@ const showFailedOnly = ref(false)
 const activeRecords = new Map()
 const visibleActive = ref([])
 const visibleFailed = ref([])
+const isDownloading = ref(false)
+const isCancelled = ref(false)
+const failureStats = ref({
+  total: 0,
+  byType: {
+    network: 0,
+    auth: 0,
+    expired_url: 0,
+    server: 0,
+    unknown: 0
+  }
+})
+
+// 下载管理器实例
+let fileDownloader = null
 
 // 下载速度和时间追踪
 const startTime = ref(0)
@@ -296,6 +350,41 @@ const speedText = computed(() => formatSpeed(downloadSpeed.value))
 // 格式化的剩余时间文本
 const remainingTimeText = computed(() => formatTime(remainingTime.value))
 
+// 是否显示失败统计
+const showFailureStats = computed(() => {
+  return failureStats.value.total > 0
+})
+
+// 处理取消下载
+const handleCancelDownload = async() => {
+  try {
+    await ElMessageBox.confirm(
+      $t('cancel_download_tip'),
+      $t('confirm_cancel'),
+      {
+        confirmButtonText: $t('yes'),
+        cancelButtonText: $t('no'),
+        type: 'warning'
+      }
+    )
+
+    // 用户确认取消 - 只调用取消方法，后续由 'cancelled' 事件统一处理
+    if (fileDownloader) {
+      fileDownloader.cancelDownload()
+    }
+  } catch {
+    // 用户取消了取消操作
+  }
+}
+
+// 更新失败统计
+const updateFailureStats = () => {
+  if (fileDownloader) {
+    const stats = fileDownloader.getDownloadStats()
+    failureStats.value = stats.failureStats || failureStats.value
+  }
+}
+
 const percent = computed(() => {
   if (!totalLength.value || !totalSize.value) {
     return 0
@@ -321,10 +410,13 @@ const percent = computed(() => {
 })
 const { formData, zipName } = toRefs(props)
 onMounted(async() => {
-  const fileDownloader = new DownloadManager({
+  fileDownloader = new DownloadManager({
     ...formData.value,
     zipName: zipName.value
   })
+
+  isDownloading.value = true
+
   fileDownloader.on('warn', (msg) => {
     warnList.value.push(msg)
   })
@@ -363,6 +455,9 @@ onMounted(async() => {
     activeRecords.delete(index)
     recordFailedDisplay(existing)
     refreshActiveDisplay()
+
+    // 更新失败统计
+    updateFailureStats()
 
     // 确保失败的文件也在 allFilesMap 中，并标记为完成（避免总进度卡住）
     const fileData = allFilesMap.get(index)
@@ -449,7 +544,19 @@ onMounted(async() => {
     lastUpdateTime.value = Date.now()
   })
   fileDownloader.on('finshed', (cells) => {
+    isDownloading.value = false
+    // 最后更新一次失败统计
+    updateFailureStats()
     emit('finsh')
+  })
+  fileDownloader.on('cancelled', () => {
+    isCancelled.value = true
+    isDownloading.value = false
+
+    // 取消后延迟关闭窗口（发出 cancel 事件直接关闭对话框）
+    setTimeout(() => {
+      emit('cancel')
+    }, 500)
   })
   fileDownloader.on('zip_progress', (payload) => {
     maxInfo.value = ''
@@ -664,6 +771,68 @@ onMounted(async() => {
         margin-right: 8px;
         animation: rotating 2s linear infinite;
         color: var(--el-color-primary);
+      }
+    }
+  }
+
+  .failure-stats-info {
+    margin-bottom: 12px;
+    padding: 12px;
+    background: linear-gradient(135deg, #fff5f5 0%, #ffe5e5 100%);
+    border-radius: 6px;
+    border-left: 3px solid var(--el-color-danger);
+    box-shadow: 0 2px 4px rgba(245, 108, 108, 0.1);
+
+    .failure-stats-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(245, 108, 108, 0.2);
+
+      .stats-icon {
+        font-size: 16px;
+        margin-right: 6px;
+        color: var(--el-color-danger);
+      }
+
+      .stats-title {
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--el-text-color-primary);
+      }
+    }
+
+    .failure-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+
+      .failure-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 10px;
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 4px;
+        font-size: 13px;
+        transition: all 0.3s;
+
+        &:hover {
+          background: rgba(255, 255, 255, 1);
+          transform: translateX(2px);
+        }
+
+        .failure-label {
+          color: var(--el-text-color-secondary);
+          margin-right: 6px;
+        }
+
+        .failure-value {
+          font-weight: 600;
+          color: var(--el-color-danger);
+          margin-left: auto;
+        }
       }
     }
   }

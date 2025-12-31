@@ -110,6 +110,16 @@
   "token_push_waiting_message": "Envío completado. Puedes cerrar el complemento y esperar a que el cliente termine la descarga.",
   "error_temp_download_url_timeout": "No se pudo obtener la URL de descarga temporal (tiempo de espera 10 s). Reintenta{ logId }",
   "download_speed": "Velocidad de descarga",
-  "remaining_time": "Tiempo restante"
+  "remaining_time": "Tiempo restante",
+  "cancel_download": "Cancelar descarga",
+  "confirm_cancel": "Confirmar cancelación",
+  "cancel_download_tip": "¿Está seguro de que desea cancelar la tarea de descarga actual?",
+  "download_cancelled": "Descarga cancelada",
+  "failure_stats": "Estadísticas de fallos",
+  "failure_network": "Error de red",
+  "failure_auth": "Error de autenticación",
+  "failure_expired_url": "Enlace caducado",
+  "failure_server": "Error del servidor",
+  "failure_unknown": "Error desconocido"
 
 }

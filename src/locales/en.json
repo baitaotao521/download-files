@@ -110,5 +110,15 @@
   "token_push_waiting_message": "Push complete. You may close the plugin and wait for the desktop client to finish downloading.",
   "error_temp_download_url_timeout": "Failed to get temporary download URL (timeout 10s). Please retry{ logId }",
   "download_speed": "Download Speed",
-  "remaining_time": "Remaining Time"
+  "remaining_time": "Remaining Time",
+  "cancel_download": "Cancel Download",
+  "confirm_cancel": "Confirm Cancel",
+  "cancel_download_tip": "Are you sure you want to cancel the current download task?",
+  "download_cancelled": "Download Cancelled",
+  "failure_stats": "Failure Stats",
+  "failure_network": "Network Error",
+  "failure_auth": "Auth Error",
+  "failure_expired_url": "Expired URL",
+  "failure_server": "Server Error",
+  "failure_unknown": "Unknown Error"
 }

@@ -110,5 +110,15 @@
     "token_push_waiting_message": "送信が完了しました。プラグインを閉じても構いません。クライアント側の完了をお待ちください。",
     "error_temp_download_url_timeout": "一時ダウンロードURLの取得がタイムアウトしました（10秒）。再試行してください{ logId }",
     "download_speed": "ダウンロード速度",
-    "remaining_time": "残り時間"
+    "remaining_time": "残り時間",
+    "cancel_download": "ダウンロードをキャンセル",
+    "confirm_cancel": "キャンセル確認",
+    "cancel_download_tip": "現在のダウンロードタスクをキャンセルしてもよろしいですか？",
+    "download_cancelled": "ダウンロードがキャンセルされました",
+    "failure_stats": "失敗統計",
+    "failure_network": "ネットワークエラー",
+    "failure_auth": "認証エラー",
+    "failure_expired_url": "リンク期限切れ",
+    "failure_server": "サーバーエラー",
+    "failure_unknown": "不明なエラー"
 }

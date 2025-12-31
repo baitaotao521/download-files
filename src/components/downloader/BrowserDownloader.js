@@ -33,6 +33,8 @@ class BrowserDownloader {
     this.emitter = emitter
     this.fileProcessor = fileProcessor
     this.zip = null
+    this.isCancelled = false
+    this.abortController = null
 
     // 初始化辅助模块
     this.progressThrottler = new ProgressThrottler(emitter, PROGRESS_THROTTLE_INTERVAL)
@@ -40,6 +42,23 @@ class BrowserDownloader {
 
     // ObjectURL 管理,防止内存泄漏
     this.objectUrls = new Set()
+
+    // 监听取消事件
+    this.emitter.on('cancelled', () => {
+      this.cancel()
+    })
+  }
+
+  /**
+   * 取消所有下载
+   */
+  cancel() {
+    this.isCancelled = true
+
+    // 中断所有正在进行的 HTTP 请求
+    if (this.abortController) {
+      this.abortController.abort()
+    }
   }
 
   /**
@@ -51,6 +70,8 @@ class BrowserDownloader {
     const limit = Math.max(1, Math.min(concurrency, source.length))
     let cursor = 0
     const pick = () => {
+      // 检查是否取消
+      if (this.isCancelled) return null
       if (cursor >= source.length) return null
       const current = source[cursor]
       cursor += 1
@@ -59,6 +80,8 @@ class BrowserDownloader {
     const runners = Array.from({ length: limit }, async() => {
       let item = pick()
       while (item) {
+        // 每个任务前检查取消状态
+        if (this.isCancelled) break
         await worker(item)
         item = pick()
       }
@@ -125,6 +148,11 @@ class BrowserDownloader {
     const maxAttempts = 3
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+    // 检查是否取消
+    if (this.isCancelled) {
+      return null
+    }
+
     // 初始进度上报
     this.progressThrottler.updateProgress({
       index: order,
@@ -134,6 +162,11 @@ class BrowserDownloader {
     })
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // 每次重试前检查取消状态
+      if (this.isCancelled) {
+        return null
+      }
+
       try {
         await this.getAttachmentUrl(fileInfo, oTable)
       } catch (error) {
@@ -154,14 +187,23 @@ class BrowserDownloader {
         return null
       }
 
+      // 为每个下载创建独立的 AbortController
+      const controller = new AbortController()
+
       let completed = false
       const [err, response] = await to(
         axios({
           method: 'get',
           responseType: 'blob',
           url: fileInfo.fileUrl,
+          signal: controller.signal,
           onDownloadProgress: (progressEvent) => {
             if (completed) return
+            // 检查取消状态并中断请求
+            if (this.isCancelled) {
+              controller.abort()
+              return
+            }
             if (progressEvent.lengthComputable && progressEvent.total > 0) {
               const percentage = Math.round(
                 (progressEvent.loaded * 100) / progressEvent.total
@@ -179,6 +221,11 @@ class BrowserDownloader {
         })
       )
       completed = true
+
+      // 检查是否因取消而中断
+      if (err && err.code === 'ERR_CANCELED') {
+        return null
+      }
 
       if (!err) {
         const blob = response.data
@@ -200,6 +247,11 @@ class BrowserDownloader {
         })
 
         return blob
+      }
+
+      // 检查是否因取消而失败
+      if (err.code === 'ERR_CANCELED') {
+        return null
       }
 
       const errorType = this.failureManager.classifyError(err)
@@ -246,6 +298,11 @@ class BrowserDownloader {
     }
 
     for (const zipList of zipsList) {
+      // 检查取消状态
+      if (this.isCancelled) {
+        return
+      }
+
       this.zip = new JSZip()
       await this.runWithConcurrency(
         zipList,
@@ -253,9 +310,19 @@ class BrowserDownloader {
         BROWSER_DOWNLOAD_CONCURRENCY_ZIP
       )
 
+      // 检查取消状态
+      if (this.isCancelled) {
+        this.zip = null
+        return
+      }
+
       const [err, content] = await to(this.zip.generateAsync(
         { type: 'blob' },
         (metadata) => {
+          // 检查取消状态
+          if (this.isCancelled) {
+            return
+          }
           const percent = metadata.percent.toFixed(2)
           this.emitter.emit('zip_progress', percent)
         }
@@ -263,7 +330,7 @@ class BrowserDownloader {
 
       if (err) {
         this.emitter.emit('max_size_warning')
-      } else {
+      } else if (!this.isCancelled) {
         saveAs(content, `${zipName}.zip`)
         // 及时释放 Blob 内存
         setTimeout(() => {
@@ -277,8 +344,16 @@ class BrowserDownloader {
       this.zip = null
     }
 
+    // 检查取消状态
+    if (this.isCancelled) {
+      return
+    }
+
     // 处理超大文件(单独下载)
     for (const fileInfo of maxChunksList) {
+      if (this.isCancelled) {
+        return
+      }
       await this.sigleDownLoad([fileInfo], oTable)
     }
 
@@ -362,6 +437,10 @@ class BrowserDownloader {
 
     // 释放 ZIP 实例
     this.zip = null
+
+    // 重置取消状态
+    this.isCancelled = false
+    this.abortController = null
   }
 }
 
