@@ -301,44 +301,22 @@ const percent = computed(() => {
     return 0
   }
 
-  // 基于字节的加权进度计算
+  // 使用已经在 progress 事件中计算好的 downloadedBytes
+  // 这个值基于 allFilesMap，包含了所有文件（包括已完成的）
   const totalBytes = totalSize.value
-  let downloadedBytes = 0
-
-  // 计算已完成文件的字节数
-  const completedSet = completedIds.value
-  const failedSet = failedIds.value
-
-  // 遍历所有活动记录计算进度
-  activeRecords.forEach((record) => {
-    const size = record.size || 0
-    const percentage = record.percentage || 0
-
-    if (completedSet.has(record.index)) {
-      // 已完成的文件
-      downloadedBytes += size
-    } else if (failedSet.has(record.index)) {
-      // 失败的文件不计入下载字节
-      // 但为了总进度不卡住，我们仍然算作"处理完成"
-      downloadedBytes += size
-    } else {
-      // 正在下载的文件，按百分比计算
-      downloadedBytes += size * (percentage / 100)
-    }
-  })
-
-  // 如果没有活动记录，但有完成的文件，使用简单的文件数量计算
-  if (activeRecords.size === 0 && (completedSet.size > 0 || failedSet.size > 0)) {
-    const finished = completedSet.size + failedSet.size
-    const val = ((finished / totalLength.value) * 100).toFixed(2) - 0
-    return val || 0
-  }
+  const downloaded = downloadedBytes.value
 
   if (totalBytes <= 0) {
     return 0
   }
 
-  const val = ((downloadedBytes / totalBytes) * 100).toFixed(2) - 0
+  // 如果所有文件都处理完了（完成或失败），确保显示 100%
+  const finished = completedIds.value.size + failedIds.value.size
+  if (finished === totalLength.value && totalLength.value > 0) {
+    return 100
+  }
+
+  const val = ((downloaded / totalBytes) * 100).toFixed(2) - 0
   return Math.min(Math.max(val || 0, 0), 100)
 })
 const { formData, zipName } = toRefs(props)
@@ -385,6 +363,20 @@ onMounted(async() => {
     activeRecords.delete(index)
     recordFailedDisplay(existing)
     refreshActiveDisplay()
+
+    // 确保失败的文件也在 allFilesMap 中，并标记为完成（避免总进度卡住）
+    const fileData = allFilesMap.get(index)
+    if (fileData) {
+      allFilesMap.set(index, { ...fileData, percentage: 100 })
+      // 重新计算总下载字节数
+      let totalDownloaded = 0
+      allFilesMap.forEach((fd) => {
+        const fileSize = fd.size || 0
+        const filePercentage = fd.percentage || 0
+        totalDownloaded += fileSize * (filePercentage / 100)
+      })
+      downloadedBytes.value = totalDownloaded
+    }
   })
   fileDownloader.on('max_size_warning', (info) => {
     zipError.value = true

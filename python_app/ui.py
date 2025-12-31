@@ -91,6 +91,7 @@ class DownloaderDesktopApp:
     self._history_failed_window: Optional[tk.Toplevel] = None
     self._history_record_map: Dict[str, Dict[str, object]] = {}
     self._history_fingerprint: Optional[str] = None
+    self._translation_cache: Dict[str, str] = {}  # 翻译结果缓存，减少重复查询
     self._build_widgets()
     self._set_language(self._initial_language_code)
     self._schedule_log_polling()
@@ -692,9 +693,9 @@ class DownloaderDesktopApp:
     self.log_toggle_button.config(text=button_text)
 
   def _schedule_stats_refresh(self) -> None:
-    """定时更新统计信息。"""
+    """定时更新统计信息（优化：降低刷新频率以减少 CPU 占用）。"""
     self._refresh_stats()
-    self.root.after(500, self._schedule_stats_refresh)
+    self.root.after(1000, self._schedule_stats_refresh)
 
   def _maybe_prompt_job_completion(self, snapshot: Dict[str, object]) -> None:
     """在任务完成时弹出提示，并提供打开保存目录的入口。"""
@@ -827,7 +828,7 @@ class DownloaderDesktopApp:
     self._maybe_prompt_job_completion(snapshot)
 
   def _refresh_file_table(self, files: List[Dict[str, object]]) -> None:
-    """在表格中渲染单个文件的进度。"""
+    """在表格中渲染单个文件的进度（优化：使用翻译缓存减少查询）。"""
     limit = max(self.user_preferences.file_display_limit or DEFAULT_FILE_DISPLAY_LIMIT, 100)
     source_files = files
     if self.failed_only_var.get():
@@ -849,7 +850,10 @@ class DownloaderDesktopApp:
     desired_set: set[str] = set()
     for entry in visible_files:
       status_key = f"file_status_{entry.get('status', 'pending')}"
-      status_label = self._t(status_key)
+      # 使用缓存的翻译结果，避免重复查询
+      if status_key not in self._translation_cache:
+        self._translation_cache[status_key] = self._t(status_key)
+      status_label = self._translation_cache[status_key]
       error = entry.get('error')
       if error:
         status_label = f"{status_label} ({error})"
@@ -966,9 +970,9 @@ class DownloaderDesktopApp:
       messagebox.showerror(self._t('dialog_error_title'), self._t('msg_stop_failed', error=str(exc)))
 
   def _schedule_log_polling(self) -> None:
-    """启动循环任务，从队列中读取日志到界面。"""
+    """启动循环任务，从队列中读取日志到界面（优化：降低轮询频率）。"""
     self._drain_log_queue()
-    self.root.after(200, self._schedule_log_polling)
+    self.root.after(300, self._schedule_log_polling)
 
   def _drain_log_queue(self) -> None:
     """将队列中的日志逐条写入文本框。"""
@@ -1018,6 +1022,8 @@ class DownloaderDesktopApp:
 
   def _apply_translations(self) -> None:
     """刷新界面上的多语言文本。"""
+    # 清除翻译缓存，确保使用新语言
+    self._translation_cache.clear()
     self._update_window_title()
     self.language_label_widget.config(text=self._t('language_label') + ':')
     self.form_frame.config(text=self._t('server_config'))
