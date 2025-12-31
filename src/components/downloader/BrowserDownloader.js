@@ -43,6 +43,11 @@ class BrowserDownloader {
     // ObjectURL 管理,防止内存泄漏
     this.objectUrls = new Set()
 
+    // ⭐ 获取临时链接的队列控制（限制并发数）
+    this.urlFetchQueue = []
+    this.urlFetchingCount = 0
+    this.URL_FETCH_CONCURRENCY = 5  // 同时最多5个链接获取请求
+
     // 监听取消事件
     this.emitter.on('cancelled', () => {
       this.cancel()
@@ -90,6 +95,49 @@ class BrowserDownloader {
   }
 
   /**
+   * 队列化获取临时链接，限制并发数
+   */
+  async _getAttachmentUrlQueued(fileInfo, oTable) {
+    return new Promise((resolve, reject) => {
+      const task = async() => {
+        try {
+          this.urlFetchingCount++
+
+          const { token, fieldId, recordId } = fileInfo
+          const url = await oTable.getAttachmentUrl(token, fieldId, recordId)
+
+          this.urlFetchingCount--
+          this._processNextUrlFetch()  // 处理队列中的下一个任务
+
+          resolve(url)
+        } catch (error) {
+          this.urlFetchingCount--
+          this._processNextUrlFetch()  // 即使失败也要处理下一个
+          reject(error)
+        }
+      }
+
+      // 如果当前并发数未满，立即执行
+      if (this.urlFetchingCount < this.URL_FETCH_CONCURRENCY) {
+        task()
+      } else {
+        // 否则加入队列等待
+        this.urlFetchQueue.push(task)
+      }
+    })
+  }
+
+  /**
+   * 处理队列中的下一个链接获取任务
+   */
+  _processNextUrlFetch() {
+    if (this.urlFetchQueue.length > 0 && this.urlFetchingCount < this.URL_FETCH_CONCURRENCY) {
+      const nextTask = this.urlFetchQueue.shift()
+      nextTask()
+    }
+  }
+
+  /**
    * 获取附件直链并应用唯一文件名
    */
   async getAttachmentUrl(fileInfo, oTable) {
@@ -98,7 +146,6 @@ class BrowserDownloader {
     if (fileInfo.fileUrl) {
       return fileInfo.fileUrl
     }
-    const { token, fieldId, recordId } = fileInfo
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     const isTimeoutError = (error) => {
@@ -114,11 +161,8 @@ class BrowserDownloader {
     let lastError = null
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        fileInfo.fileUrl = await oTable.getAttachmentUrl(
-          token,
-          fieldId,
-          recordId
-        )
+        // ⭐ 使用队列化的获取方法，限制并发
+        fileInfo.fileUrl = await this._getAttachmentUrlQueued(fileInfo, oTable)
         return fileInfo.fileUrl
       } catch (error) {
         lastError = error
