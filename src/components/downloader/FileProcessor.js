@@ -149,8 +149,8 @@ class FileProcessor {
     // 收集所有唯一的 recordId
     const recordIds = [...new Set(cellList.map(cell => cell.recordId))]
 
-    // 批量预取（限制并发数避免过载）
-    const PREFETCH_CONCURRENCY = 10
+    // 批量预取（满速并发）
+    const PREFETCH_CONCURRENCY = 30
     const tasks = []
 
     for (const recordId of recordIds) {
@@ -180,7 +180,7 @@ class FileProcessor {
       )
     }
 
-    console.log(`✅ 预取完成: ${tasks.length} 个字段数据已缓存`)
+    console.log(`✅ 预取完成: ${tasks.length} 个字段数据已缓存（并发数: ${PREFETCH_CONCURRENCY}，满速模式）`)
   }
 
   /**

@@ -2,6 +2,7 @@ import { saveAs } from 'file-saver'
 import JSZip from 'jszip'
 import axios from 'axios'
 import to from 'await-to-js'
+import pLimit from 'p-limit'
 import { chunkArrayByMaxSize } from '@/utils/index.js'
 import { i18n } from '@/locales/i18n.js'
 import ProgressThrottler from './ProgressThrottler.js'
@@ -15,8 +16,8 @@ const MAX_ZIP_SIZE = MAX_ZIP_SIZE_NUM * 1024 * 1024 * 1024
 // 经验值:单文件直下并发略高一些;ZIP 打包需要占用内存与 CPU,适当降低并发更稳
 const BROWSER_DOWNLOAD_CONCURRENCY_INDIVIDUAL = 50
 const BROWSER_DOWNLOAD_CONCURRENCY_ZIP = 30
-// 进度更新节流间隔(毫秒)
-const PROGRESS_THROTTLE_INTERVAL = 150
+// 进度更新节流间隔(毫秒) - 优化：100ms 提升 UI 流畅度
+const PROGRESS_THROTTLE_INTERVAL = 100
 
 /**
  * 浏览器直接下载器
@@ -43,10 +44,8 @@ class BrowserDownloader {
     // ObjectURL 管理,防止内存泄漏
     this.objectUrls = new Set()
 
-    // ⭐ 获取临时链接的队列控制（限制并发数）
-    this.urlFetchQueue = []
-    this.urlFetchingCount = 0
-    this.URL_FETCH_CONCURRENCY = 30 // 同时最多5个链接获取请求
+    // ⭐ 使用 p-limit 简化 URL 获取并发控制
+    this.urlFetchLimit = pLimit(50)
 
     // 监听取消事件
     this.emitter.on('cancelled', () => {
@@ -64,6 +63,9 @@ class BrowserDownloader {
     if (this.abortController) {
       this.abortController.abort()
     }
+
+    // 清空 p-limit 队列
+    this.urlFetchLimit.clearQueue()
   }
 
   /**
@@ -95,46 +97,11 @@ class BrowserDownloader {
   }
 
   /**
-   * 队列化获取临时链接，限制并发数
+   * 获取临时链接（使用 p-limit 自动管理并发）
    */
   async _getAttachmentUrlQueued(fileInfo, oTable) {
-    return new Promise((resolve, reject) => {
-      const task = async() => {
-        try {
-          this.urlFetchingCount++
-
-          const { token, fieldId, recordId } = fileInfo
-          const url = await oTable.getAttachmentUrl(token, fieldId, recordId)
-
-          this.urlFetchingCount--
-          this._processNextUrlFetch() // 处理队列中的下一个任务
-
-          resolve(url)
-        } catch (error) {
-          this.urlFetchingCount--
-          this._processNextUrlFetch() // 即使失败也要处理下一个
-          reject(error)
-        }
-      }
-
-      // 如果当前并发数未满，立即执行
-      if (this.urlFetchingCount < this.URL_FETCH_CONCURRENCY) {
-        task()
-      } else {
-        // 否则加入队列等待
-        this.urlFetchQueue.push(task)
-      }
-    })
-  }
-
-  /**
-   * 处理队列中的下一个链接获取任务
-   */
-  _processNextUrlFetch() {
-    if (this.urlFetchQueue.length > 0 && this.urlFetchingCount < this.URL_FETCH_CONCURRENCY) {
-      const nextTask = this.urlFetchQueue.shift()
-      nextTask()
-    }
+    const { token, fieldId, recordId } = fileInfo
+    return this.urlFetchLimit(() => oTable.getAttachmentUrl(token, fieldId, recordId))
   }
 
   /**
