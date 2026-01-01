@@ -46,7 +46,7 @@ class BrowserDownloader {
     // ⭐ 获取临时链接的队列控制（限制并发数）
     this.urlFetchQueue = []
     this.urlFetchingCount = 0
-    this.URL_FETCH_CONCURRENCY = 5  // 同时最多5个链接获取请求
+    this.URL_FETCH_CONCURRENCY = 30 // 同时最多5个链接获取请求
 
     // 监听取消事件
     this.emitter.on('cancelled', () => {
@@ -107,12 +107,12 @@ class BrowserDownloader {
           const url = await oTable.getAttachmentUrl(token, fieldId, recordId)
 
           this.urlFetchingCount--
-          this._processNextUrlFetch()  // 处理队列中的下一个任务
+          this._processNextUrlFetch() // 处理队列中的下一个任务
 
           resolve(url)
         } catch (error) {
           this.urlFetchingCount--
-          this._processNextUrlFetch()  // 即使失败也要处理下一个
+          this._processNextUrlFetch() // 即使失败也要处理下一个
           reject(error)
         }
       }
