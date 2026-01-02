@@ -20,13 +20,13 @@ export const removeSpecialChars = (str) =>
 export const getFolderName = (value) => {
   if (!value) return ''
   if (Array.isArray(value) && value.length) {
-    // For multi-select fields with multiple values, join them with comma
+    // For multi-select fields with multiple values, join them with underscore
     // If there's only one value, just return it
     if (value.length === 1) {
       return value[0]?.text || value[0]?.name || value[0]
     }
-    // Join multiple selections with comma separator
-    return value.map(item => item?.text || item?.name || item).filter(Boolean).join(',')
+    // Join multiple selections with underscore separator (safer for file paths than comma)
+    return value.map(item => item?.text || item?.name || item).filter(Boolean).join('_')
   }
   if (typeof value === 'object') return value.text || value.name
   return value
