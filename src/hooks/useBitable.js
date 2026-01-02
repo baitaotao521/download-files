@@ -5,6 +5,7 @@ const SUPPORT_TEXTS = [
   'Barcode',
   'CreatedTime',
   'SingleSelect',
+  'MultiSelect',
   'CreatedUser',
   'DateTime',
   'Location',
