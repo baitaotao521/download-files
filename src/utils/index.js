@@ -17,9 +17,15 @@ export const getFileSize = (size) => {
 export const removeSpecialChars = (str) =>
   str.replace(/[\n\t\r]/g, '').replace(/\//g, '-')
 
-export const getFolderName = (value) => {
+export const getFolderName = (value, multiSelectSeparator = null) => {
   if (!value) return ''
   if (Array.isArray(value) && value.length) {
+    // 如果提供了分隔符，则将所有值用分隔符连接
+    if (multiSelectSeparator !== null) {
+      const names = value.map(item => item?.text || item?.name || '').filter(Boolean)
+      return names.join(multiSelectSeparator)
+    }
+    // 默认行为：只返回第一个值
     return value[0]?.text || value[0]?.name
   }
   if (typeof value === 'object') return value.text || value.name

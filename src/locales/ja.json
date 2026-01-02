@@ -28,6 +28,8 @@
     "download_method": "ダウンロード方法",
     "zip_after_download": "ダウンロード完了後にZIP圧縮",
     "first_directory": "1次ディレクトリ",
+    "first_folder_multi_select_separator": "1次ディレクトリの複数選択値の区切り文字",
+    "first_folder_multi_select_separator_hint": "1次ディレクトリフィールドが複数選択タイプの場合、複数のオプション間の区切り文字。例えば '-' に設定すると、'製品,デザイン,開発' は '製品-デザイン-開発' と表示されます",
     "second_directory": "2次ディレクトリ",
     "download": "ダウンロード",
     "download_selected_records": "選択中のレコードをダウンロード",

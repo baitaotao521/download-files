@@ -206,8 +206,23 @@ class FileProcessor {
     }
 
     const getProcessedFolderName = async(fieldKey) => {
-      const rawValue = await this._getCellStringCached(fieldKey, fileInfo.recordId, oTable)
-      return removeSpecialChars(getFolderName(rawValue)) || $t('uncategorized')
+      // 对于一级目录且需要多选值拼接时，使用 getCellValue 获取原始数组
+      const needMultiSelectJoin = fieldKey === this.config.firstFolderKey && this.config.firstFolderMultiSelectMark
+
+      let rawValue
+      if (needMultiSelectJoin) {
+        try {
+          rawValue = await oTable.getCellValue(fieldKey, fileInfo.recordId)
+        } catch (error) {
+          console.warn(`获取字段原始值失败，回退到字符串值: fieldId=${fieldKey}, recordId=${fileInfo.recordId}`, error)
+          rawValue = await this._getCellStringCached(fieldKey, fileInfo.recordId, oTable)
+        }
+      } else {
+        rawValue = await this._getCellStringCached(fieldKey, fileInfo.recordId, oTable)
+      }
+
+      const separator = needMultiSelectJoin ? this.config.firstFolderMultiSelectMark : null
+      return removeSpecialChars(getFolderName(rawValue, separator)) || $t('uncategorized')
     }
 
     let parentFolder = ''
@@ -329,8 +344,23 @@ class FileProcessor {
     // 批量处理文件夹路径(可并发)
     if (this._supportsFolderClassification() && this.config.downloadTypeByFolders) {
       const getProcessedFolderName = async(fieldKey, recordId) => {
-        const name = await this._getCellStringCached(fieldKey, recordId, oTable)
-        return removeSpecialChars(getFolderName(name)) || $t('uncategorized')
+        // 对于一级目录且需要多选值拼接时，使用 getCellValue 获取原始数组
+        const needMultiSelectJoin = fieldKey === this.config.firstFolderKey && this.config.firstFolderMultiSelectMark
+
+        let rawValue
+        if (needMultiSelectJoin) {
+          try {
+            rawValue = await oTable.getCellValue(fieldKey, recordId)
+          } catch (error) {
+            console.warn(`获取字段原始值失败，回退到字符串值: fieldId=${fieldKey}, recordId=${recordId}`, error)
+            rawValue = await this._getCellStringCached(fieldKey, recordId, oTable)
+          }
+        } else {
+          rawValue = await this._getCellStringCached(fieldKey, recordId, oTable)
+        }
+
+        const separator = needMultiSelectJoin ? this.config.firstFolderMultiSelectMark : null
+        return removeSpecialChars(getFolderName(rawValue, separator)) || $t('uncategorized')
       }
 
       const setCellFolderName = async(cell, firstFolderKey, secondFolderKey) => {

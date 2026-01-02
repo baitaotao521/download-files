@@ -28,6 +28,8 @@
   "download_method": "Download Method",
   "zip_after_download": "Zip after download",
   "first_directory": "First Directory",
+  "first_folder_multi_select_separator": "Multi-select Separator for First Directory",
+  "first_folder_multi_select_separator_hint": "Separator for multi-select field values in the first directory. For example, if set to '-', 'Product, Design, Development' will display as 'Product-Design-Development'",
   "second_directory": "Second Directory",
   "download": "Download",
   "download_selected_records": "Download Selected Records",

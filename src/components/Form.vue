@@ -288,16 +288,43 @@
             v-model="formData.firstFolderKey"
             :placeholder="$t('select_first_directory')"
             style="width: 100%"
-          clearable
+            clearable
+          >
+            <el-option
+              v-for="meta in singleSelectList"
+              :key="meta.id"
+              :label="meta.name"
+              :value="meta.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item
+          :label="$t('first_folder_multi_select_separator')"
+          prop="firstFolderMultiSelectMark"
+          v-if="
+            folderClassificationAvailable &&
+            formData.downloadTypeByFolders &&
+            formData.firstFolderKey
+          "
         >
-          <el-option
-            v-for="meta in singleSelectList"
-            :key="meta.id"
-            :label="meta.name"
-            :value="meta.id"
-          />
-        </el-select>
-      </el-form-item>
+          <template #label>
+            <p style="display: flex; align-items: center">
+              <span style="margin-right: 2px">{{ $t('first_folder_multi_select_separator') }}</span>
+              <el-popover
+                placement="top-start"
+                trigger="hover"
+                :content="$t('first_folder_multi_select_separator_hint')"
+              >
+                <template #reference>
+                  <el-icon>
+                    <InfoFilled />
+                  </el-icon>
+                </template>
+              </el-popover>
+            </p>
+          </template>
+          <el-input v-model="formData.firstFolderMultiSelectMark" />
+        </el-form-item>
         <el-form-item
           :label="$t('second_directory')"
           prop="secondFolderKey"
@@ -479,6 +506,7 @@ const formData = reactive({
   zipAfterDownload: false,
   downloadTypeByFolders: false,
   firstFolderKey: '',
+  firstFolderMultiSelectMark: '-',
   secondFolderKey: '',
   wsHost: '127.0.0.1',
   wsPort: 11548,
@@ -533,6 +561,18 @@ const rules = reactive({
     {
       required: true,
       message: '请选择输入间隔文字',
+      trigger: 'change'
+    },
+    {
+      pattern: /^[^\/\.<>!@#$%^&*()=\[\]{}|\\:;"'?,~`]*$/,
+      message: '包含一些特殊字符，暂不支持',
+      trigger: 'change'
+    }
+  ],
+  firstFolderMultiSelectMark: [
+    {
+      required: true,
+      message: '请输入一级目录多选值间隔文字',
       trigger: 'change'
     },
     {
@@ -741,6 +781,8 @@ watch(
   () => {
     // 清除二级目录的验证错误
     elform.value.clearValidate('secondFolderKey')
+    // 清除多选间隔符的验证错误
+    elform.value.clearValidate('firstFolderMultiSelectMark')
   }
 )
 watch(

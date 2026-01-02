@@ -28,6 +28,8 @@
   "download_method": "下载方式",
   "zip_after_download": "下载完成后压缩为ZIP",
   "first_directory": "一级目录",
+  "first_folder_multi_select_separator": "一级目录多选值间隔符",
+  "first_folder_multi_select_separator_hint": "当一级目录字段为多选类型时，多个选项之间的间隔符。例如设置为 '-'，则'产品,设计,开发'会显示为'产品-设计-开发'",
   "second_directory": "二级目录",
   "download": "下载",
   "download_selected_records": "下载所选记录",

@@ -28,6 +28,8 @@
   "download_method": "Método de descarga",
   "zip_after_download": "Comprimir en ZIP al finalizar",
   "first_directory": "Directorio de primer nivel",
+  "first_folder_multi_select_separator": "Separador de valores de selección múltiple para directorio de primer nivel",
+  "first_folder_multi_select_separator_hint": "Separador entre múltiples opciones cuando el campo del directorio de primer nivel es de tipo selección múltiple. Por ejemplo, si se establece en '-', 'Producto,Diseño,Desarrollo' se mostrará como 'Producto-Diseño-Desarrollo'",
   "second_directory": "Directorio de segundo nivel",
   "download": "Descargar",
   "download_selected_records": "Descargar registros seleccionados",
