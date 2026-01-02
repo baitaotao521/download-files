@@ -21,12 +21,10 @@ export const getFolderName = (value) => {
   if (!value) return ''
   if (Array.isArray(value) && value.length) {
     // For multi-select fields with multiple values, join them with underscore
-    // If there's only one value, just return it
-    if (value.length === 1) {
-      return value[0]?.text || value[0]?.name || value[0]
-    }
-    // Join multiple selections with underscore separator (safer for file paths than comma)
-    return value.map(item => item?.text || item?.name || item).filter(Boolean).join('_')
+    // Extract text/name from each value and filter out empty ones
+    const names = value.map(item => item?.text || item?.name || item).filter(Boolean)
+    // Join multiple selections with underscore separator (safer for file paths)
+    return names.join('_')
   }
   if (typeof value === 'object') return value.text || value.name
   return value
