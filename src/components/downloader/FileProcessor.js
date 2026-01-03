@@ -117,6 +117,72 @@ class FileProcessor {
     this.cellStringCache.set(cacheKey, value)
     return value
   }
+
+  /**
+   * 批量预取所有需要的字段数据，避免并发时频繁调用 getCellString
+   * @param {Array} cellList - 文件列表
+   * @param {Object} oTable - 数据表实例
+   */
+  async _prefetchAllFieldData(cellList, oTable) {
+    // 收集所有需要查询的字段 ID
+    const fieldIds = new Set()
+
+    // 自定义命名字段
+    if (this.config.fileNameType === 1 && Array.isArray(this.config.fileNameByField)) {
+      this.config.fileNameByField.forEach(id => fieldIds.add(id))
+    }
+
+    // 文件夹分类字段
+    if (this._supportsFolderClassification() && this.config.downloadTypeByFolders) {
+      if (this.config.firstFolderKey) {
+        fieldIds.add(this.config.firstFolderKey)
+      }
+      if (this.config.secondFolderKey) {
+        fieldIds.add(this.config.secondFolderKey)
+      }
+    }
+
+    if (fieldIds.size === 0) {
+      return // 无需预取
+    }
+
+    // 收集所有唯一的 recordId
+    const recordIds = [...new Set(cellList.map(cell => cell.recordId))]
+
+    // 批量预取（满速并发）
+    const PREFETCH_CONCURRENCY = 30
+    const tasks = []
+
+    for (const recordId of recordIds) {
+      for (const fieldId of fieldIds) {
+        const cacheKey = `${recordId}::${fieldId}`
+        if (!this.cellStringCache.has(cacheKey)) {
+          tasks.push({ recordId, fieldId })
+        }
+      }
+    }
+
+    // 分批并发执行
+    for (let i = 0; i < tasks.length; i += PREFETCH_CONCURRENCY) {
+      const batch = tasks.slice(i, i + PREFETCH_CONCURRENCY)
+      await Promise.all(
+        batch.map(async({ recordId, fieldId }) => {
+          try {
+            const value = await oTable.getCellString(fieldId, recordId)
+            const cacheKey = `${recordId}::${fieldId}`
+            this.cellStringCache.set(cacheKey, value)
+          } catch (error) {
+            console.warn(`预取字段数据失败: recordId=${recordId}, fieldId=${fieldId}`, error)
+            // 失败时设置空值，避免后续重复请求
+            this.cellStringCache.set(`${recordId}::${fieldId}`, '')
+          }
+        })
+      )
+    }
+
+    console.log(`✅ 预取完成: ${tasks.length} 个字段数据已缓存（并发数: ${PREFETCH_CONCURRENCY}，满速模式）`)
+  }
+
   /**
    * 判断当前是否支持文件夹分类(ZIP 或桌面端下载)
    */
