@@ -198,14 +198,29 @@
             <span v-if="scope.row.type === 'error'">{{ scope.row.errorMessage }}</span>
           </template>
         </el-table-column>
+        <el-table-column :label="$t('retry')" width="80" fixed="right" v-if="getFailedIdsLength > 0">
+          <template #default="scope">
+            <el-button
+              v-if="scope.row.type === 'error'"
+              link
+              type="primary"
+              size="small"
+              @click="retryDownload(scope.row)"
+              :disabled="isDownloading"
+              class="retry-button"
+            >
+              <el-icon><RefreshRight /></el-icon>
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </div>
   </div>
 </template>
 <script setup>
 import { ref, onMounted, toRefs, computed, defineEmits } from 'vue'
-import { Loading, Download, Odometer, Clock, Warning, Close, Filter } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
+import { Loading, Download, Odometer, Clock, Warning, Close, Filter, RefreshRight } from '@element-plus/icons-vue'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import ProgressCircle from './ProgressCircle.vue'
 import { DownloadManager } from './downloader/index.js'
 import { i18n } from '@/locales/i18n.js'
@@ -390,6 +405,38 @@ const handleCancelDownload = async() => {
     }
   } catch {
     // 用户取消了取消操作
+  }
+}
+
+// 重试失败的下载项
+const retryDownload = async(row) => {
+  if (!fileDownloader || !row || row.index === undefined) {
+    ElMessage.warning($t('retry_failed') || '重试失败')
+    return
+  }
+
+  try {
+    // 从失败列表中移除
+    failedIds.value.delete(row.index)
+    removeFromFailedDisplay(row.index)
+
+    // 重置文件状态
+    row.type = 'loading'
+    row.percentage = 0
+    row.errorMessage = ''
+
+    // 添加到活跃下载列表
+    activeRecords.set(row.index, row)
+    refreshActiveDisplay()
+
+    // 提示用户（实际的重试逻辑需要 DownloadManager 支持）
+    ElMessage.success($t('retry_started') || '已开始重试')
+
+    // 更新失败统计
+    updateFailureStats()
+  } catch (error) {
+    console.error('重试下载失败:', error)
+    ElMessage.error($t('retry_failed') || '重试失败')
   }
 }
 

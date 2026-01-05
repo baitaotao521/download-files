@@ -44,6 +44,7 @@
   "select_data_table": "请选择数据表",
   "select_view": "请选择数据表",
   "select_attachment_fields": "请选择附件字段",
+  "no_attachment_fields": "当前数据表没有附件字段",
   "select_file_naming_method": "请选择附件字段",
   "select_file_name_field": "请选择文件命名字段",
   "select_download_method": "请选择下载方式",
@@ -122,6 +123,9 @@
   "failure_auth":"授权错误",
   "failure_expired_url":"链接过期",
   "failure_server":"服务器错误",
-  "failure_unknown":"未知错误"
+  "failure_unknown":"未知错误",
+  "retry":"重试",
+  "retry_started":"已开始重试",
+  "retry_failed":"重试失败"
 
 }

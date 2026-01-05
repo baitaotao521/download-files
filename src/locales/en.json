@@ -44,6 +44,7 @@
   "select_data_table": "Select Data Table",
   "select_view": "Select View",
   "select_attachment_fields": "Select Attachment Fields",
+  "no_attachment_fields": "No attachment fields in this table",
   "select_file_naming_method": "Select File Naming Method",
   "select_file_name_field": "Select File Name Field",
   "select_download_method": "Select Download Method",
@@ -122,5 +123,8 @@
   "failure_auth": "Auth Error",
   "failure_expired_url": "Expired URL",
   "failure_server": "Server Error",
-  "failure_unknown": "Unknown Error"
+  "failure_unknown": "Unknown Error",
+  "retry": "Retry",
+  "retry_started": "Retry started",
+  "retry_failed": "Retry failed"
 }

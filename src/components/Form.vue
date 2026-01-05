@@ -90,6 +90,12 @@
           :placeholder="$t('select_attachment_fields')"
           style="width: 100%"
         >
+          <template #empty>
+            <div class="empty-attachment-tip">
+              <el-icon :size="32" color="var(--el-color-info-light-3)"><FolderOpened /></el-icon>
+              <p>{{ $t('no_attachment_fields') }}</p>
+            </div>
+          </template>
           <el-option
             v-for="meta in attachmentList"
             :key="meta.id"
@@ -498,7 +504,7 @@
 import { ref, onMounted, reactive, toRefs, watch, computed, defineAsyncComponent } from 'vue'
 import { bitable, FieldType, base, PermissionEntity, OperationType } from '@lark-base-open/js-sdk'
 
-import { Download, InfoFilled, Tickets, WarningFilled } from '@element-plus/icons-vue'
+import { Download, InfoFilled, Tickets, WarningFilled, FolderOpened } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 // 懒加载下载弹窗组件（仅在需要时加载，减少初始包体积）
 const DownModel = defineAsyncComponent(() => import('./DownModel.vue'))
@@ -1108,6 +1114,31 @@ onMounted(async() => {
 .form-container {
   min-height: 300px;
 
+  .form {
+    // 表单分组样式
+    .el-form-item {
+      transition: all 0.3s ease;
+      padding: 4px 8px;
+      margin-bottom: 18px;
+      border-radius: 8px;
+
+      &:hover {
+        background: var(--el-fill-color-lighter);
+      }
+    }
+
+    // 下拉选择器优化
+    .el-select {
+      .el-input__wrapper {
+        transition: all 0.3s ease;
+      }
+
+      &:hover .el-input__wrapper {
+        box-shadow: 0 0 0 1px var(--el-color-primary-light-5) inset;
+      }
+    }
+  }
+
   .btns {
     display: flex;
     justify-content: flex-end;
@@ -1115,10 +1146,29 @@ onMounted(async() => {
     gap: 12px;
     width: 100%;
     margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--el-border-color-lighter);
 
     .btn-select,
     .btn-download {
       min-width: 160px;
+      border-radius: 8px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      }
+    }
+
+    .btn-download {
+      background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-primary-light-3));
+      border: none;
+
+      &:hover {
+        background: linear-gradient(135deg, var(--el-color-primary-dark-2), var(--el-color-primary));
+      }
     }
   }
 }
@@ -1288,5 +1338,19 @@ onMounted(async() => {
 
 .advanced-link:hover {
   text-decoration: underline;
+}
+
+.empty-attachment-tip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  color: var(--el-text-color-secondary);
+
+  p {
+    margin: 8px 0 0;
+    font-size: 13px;
+  }
 }
 </style>

@@ -71,6 +71,12 @@ main {
     align-items: center;
     justify-content: end;
     text-decoration: none; /* 确保没有下划线 */
+    transition: all 0.3s ease;
+
+    &:hover {
+      opacity: 0.8;
+      transform: translateX(-2px);
+    }
   }
 }
 .hd {
@@ -78,14 +84,35 @@ main {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 
   .el-button {
     flex: 1;
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
   }
 }
-  .forms {
-    min-height: 300px;
+.forms {
+  min-height: 300px;
+}
+
+// 响应式优化
+@media (max-width: 480px) {
+  .hd {
+    flex-direction: column;
+
+    .el-button {
+      width: 100%;
+    }
   }
+}
+
 .corner-stat {
   position: absolute;
   right: 8px;
