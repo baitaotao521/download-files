@@ -1,6 +1,36 @@
 <template>
-  <div v-loading="loading" class="form-container">
+  <div class="form-container">
+    <!-- 骨架屏加载状态 -->
+    <el-skeleton v-if="loading" :rows="12" animated>
+      <template #template>
+        <div class="skeleton-wrapper">
+          <el-skeleton-item variant="h3" style="width: 30%; margin-bottom: 20px;" />
+
+          <el-skeleton-item variant="text" style="width: 20%; margin-bottom: 8px;" />
+          <el-skeleton-item variant="rect" style="height: 32px; margin-bottom: 20px;" />
+
+          <el-skeleton-item variant="text" style="width: 20%; margin-bottom: 8px;" />
+          <el-skeleton-item variant="rect" style="height: 32px; margin-bottom: 20px;" />
+
+          <el-skeleton-item variant="text" style="width: 25%; margin-bottom: 8px;" />
+          <el-skeleton-item variant="rect" style="height: 32px; margin-bottom: 20px;" />
+
+          <el-skeleton-item variant="text" style="width: 25%; margin-bottom: 8px;" />
+          <el-skeleton-item variant="rect" style="height: 32px; margin-bottom: 20px;" />
+
+          <el-skeleton-item variant="text" style="width: 30%; margin-bottom: 8px;" />
+          <el-skeleton-item variant="rect" style="height: 32px; margin-bottom: 20px;" />
+
+          <div style="display: flex; justify-content: center; margin-top: 30px;">
+            <el-skeleton-item variant="button" style="width: 120px; height: 40px;" />
+          </div>
+        </div>
+      </template>
+    </el-skeleton>
+
+    <!-- 实际表单内容 -->
     <el-form
+      v-else
       ref="elform"
       class="form"
       :model="formData"
@@ -8,7 +38,6 @@
       label-width="auto"
       :scroll-into-view-options="true"
       :label-position="'left'"
-      v-if="!loading"
     >
       <el-form-item :label="$t('data_table_column')" prop="tableId">
         <el-select
@@ -466,12 +495,13 @@
   </div>
 </template>
 <script setup>
-import { ref, onMounted, reactive, toRefs, watch, computed } from 'vue'
+import { ref, onMounted, reactive, toRefs, watch, computed, defineAsyncComponent } from 'vue'
 import { bitable, FieldType, base, PermissionEntity, OperationType } from '@lark-base-open/js-sdk'
 
 import { Download, InfoFilled, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
-import DownModel from './DownModel.vue'
+// 懒加载下载弹窗组件（仅在需要时加载，减少初始包体积）
+const DownModel = defineAsyncComponent(() => import('./DownModel.vue'))
 import draggable from 'vuedraggable'
 
 import { SUPPORT_TYPES, getInfoByTableMetaList, sortByOrder } from '@/hooks/useBitable.js'
@@ -1174,6 +1204,46 @@ onMounted(async() => {
     justify-content: flex-end;
     gap: 8px;
     width: 100%;
+  }
+}
+
+// ========== 骨架屏样式 ==========
+.skeleton-wrapper {
+  padding: 20px;
+  background: var(--el-bg-color);
+  border-radius: 8px;
+  animation: skeleton-fade-in 0.3s ease-out;
+
+  .el-skeleton__item {
+    background: linear-gradient(
+      90deg,
+      var(--el-fill-color-lighter) 25%,
+      var(--el-fill-color-light) 50%,
+      var(--el-fill-color-lighter) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+    border-radius: 4px;
+  }
+}
+
+@keyframes skeleton-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes skeleton-loading {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }
 
