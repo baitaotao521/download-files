@@ -123,9 +123,6 @@
   "failure_auth":"授权错误",
   "failure_expired_url":"链接过期",
   "failure_server":"服务器错误",
-  "failure_unknown":"未知错误",
-  "retry":"重试",
-  "retry_started":"已开始重试",
-  "retry_failed":"重试失败"
+  "failure_unknown":"未知错误"
 
 }

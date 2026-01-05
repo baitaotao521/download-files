@@ -123,8 +123,5 @@
   "failure_auth": "Auth Error",
   "failure_expired_url": "Expired URL",
   "failure_server": "Server Error",
-  "failure_unknown": "Unknown Error",
-  "retry": "Retry",
-  "retry_started": "Retry started",
-  "retry_failed": "Retry failed"
+  "failure_unknown": "Unknown Error"
 }
