@@ -17,12 +17,15 @@ const WEBSOCKET_ACK_TYPE = 'feishu_attachment_ack'
  * - 授权码模式推送
  * - 处理服务端 ACK 消息
  * - 链接刷新机制
+ * - 集成埋点追踪
  */
 class WebSocketDownloader {
-  constructor(emitter, fileProcessor, browserDownloader) {
+  constructor(emitter, fileProcessor, browserDownloader, umamiTracker = null, downloadChannel = '') {
     this.emitter = emitter
     this.fileProcessor = fileProcessor
     this.browserDownloader = browserDownloader
+    this.umamiTracker = umamiTracker
+    this.downloadChannel = downloadChannel
   }
 
   /**

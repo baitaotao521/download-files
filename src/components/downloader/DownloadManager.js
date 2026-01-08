@@ -42,13 +42,20 @@ class DownloadManager {
     this.fileProcessor = new FileProcessor(this.config, this.emitter)
 
     // 初始化浏览器下载器
-    this.browserDownloader = new BrowserDownloader(this.emitter, this.fileProcessor)
+    this.browserDownloader = new BrowserDownloader(
+      this.emitter,
+      this.fileProcessor,
+      this.umamiTracker,
+      this.config.downloadChannel
+    )
 
     // 初始化 WebSocket 下载器
     this.webSocketDownloader = new WebSocketDownloader(
       this.emitter,
       this.fileProcessor,
-      this.browserDownloader
+      this.browserDownloader,
+      this.umamiTracker,
+      this.config.downloadChannel
     )
 
     // 绑定下载统计事件
@@ -80,9 +87,12 @@ class DownloadManager {
     // 监听 ZIP 打包完成
     this.emitter.on('zip_progress', (payload) => {
       if (payload && typeof payload === 'object' && payload.stage === 'job_complete') {
-        this.umamiTracker.trackZipProgress({
-          stage: 'complete',
-          fileCount: this.cellList.length
+        const totalSize = this.cellList.reduce((sum, file) => sum + (file.size || 0), 0)
+        this.umamiTracker.trackZipComplete({
+          fileCount: this.cellList.length,
+          totalSize,
+          duration: Date.now() - this.startTime,
+          downloadMode: this.config.downloadChannel
         })
       }
     })
@@ -110,18 +120,24 @@ class DownloadManager {
 
     if (!this.cellList.length) {
       this.emitter.emit('info', $t('no_files_to_download_message'))
-      this.emitter.emit('finshed')
+      this.emitter.emit('finished')
       return ''
     }
 
     // 计算总大小
     const totalSize = this.cellList.reduce((sum, file) => sum + (file.size || 0), 0)
 
-    // 统计用户配置
-    this.umamiTracker.trackUserConfig({
+    // 重置会话 ID（开始新下载任务）
+    this.umamiTracker.resetSession()
+
+    // 统计用户配置提交
+    this.umamiTracker.trackConfigSubmit({
       fileNameType: this.config.fileNameType,
       downloadTypeByFolders: this.config.downloadTypeByFolders,
-      attachmentFieldsCount: this.config.attachmentFileds?.length || 0
+      attachmentFieldsCount: this.config.attachmentFileds?.length || 0,
+      downloadChannel: this.config.downloadChannel,
+      downloadType: this.config.downloadType,
+      concurrency: this.config.concurrency || 0
     })
 
     // 统计下载开始
@@ -173,26 +189,46 @@ class DownloadManager {
 
       // 检查是否被用户取消
       if (this.isCancelled && this.cancelReason === 'user_manual_cancel') {
-        // 统计用户取消
+        // 统计用户主动取消
         const duration = Date.now() - this.startTime
         this.umamiTracker.trackDownloadCancel({
           reason: this.cancelReason,
           fileCount: this.cellList.length,
           successCount: this.successCount,
           failedCount: this.failedCount,
-          duration
+          duration,
+          downloadChannel: this.config.downloadChannel
         })
       } else {
         // 统计正常下载完成
         const duration = Date.now() - this.startTime
+        const totalSize = this.cellList.reduce((sum, file) => sum + (file.size || 0), 0)
+
         this.umamiTracker.trackDownloadComplete({
           fileCount: this.cellList.length,
           successCount: this.successCount,
           failedCount: this.failedCount,
           duration,
           isCancelled: this.isCancelled,
-          failureStats
+          failureStats,
+          downloadChannel: this.config.downloadChannel
         })
+
+        // 统计下载速度性能
+        if (duration > 0 && totalSize > 0) {
+          const totalSizeMB = totalSize / (1024 * 1024)
+          const durationSeconds = duration / 1000
+          const averageSpeedMBps = totalSizeMB / durationSeconds
+
+          this.umamiTracker.trackDownloadSpeed({
+            averageSpeedMBps,
+            peakSpeedMBps: averageSpeedMBps * 1.5, // 估算峰值速度
+            fileCount: this.cellList.length,
+            totalSizeMB,
+            duration,
+            downloadMode: this.config.downloadChannel
+          })
+        }
       }
     } catch (error) {
       console.error('download failed', error)
@@ -207,51 +243,116 @@ class DownloadManager {
         this.cancelReason = errorType
       }
 
-      // 统计下载取消
+      // 统计异常中断（下载_取消）
       const duration = Date.now() - this.startTime
       this.umamiTracker.trackDownloadCancel({
         reason: this.cancelReason,
         fileCount: this.cellList.length,
         successCount: this.successCount,
         failedCount: this.failedCount,
-        duration
+        duration,
+        downloadChannel: this.config.downloadChannel,
+        errorCode: error?.code || error?.name,
+        errorStack: error?.stack
       })
 
-      // 统计下载失败
-      this.umamiTracker.trackDownloadError({
-        type: error?.name || 'unknown',
+      // 统计致命错误
+      this.umamiTracker.trackDownloadFatalError({
+        type: error?.name || 'Error',
         message: error?.message || '未知错误',
-        downloadMode: this.config.downloadChannel
+        downloadMode: this.config.downloadChannel,
+        code: error?.code,
+        stack: error?.stack,
+        httpStatus: error?.response?.status
       })
     } finally {
       this.isDownloading = false
-      this.emitter.emit('finshed')
+      this.emitter.emit('finished')
     }
   }
 
   /**
-   * 分类错误类型
+   * 分类错误类型（增强版：支持更多错误场景）
    */
   _classifyErrorType(error) {
     const status = error?.response?.status
     const message = error?.message || ''
+    const code = error?.code || ''
+    const messageLower = message.toLowerCase()
 
-    // 网络错误
-    if (error?.code === 'ECONNABORTED' || message.toLowerCase().includes('timeout')) {
+    // 网络相关错误
+    if (code === 'ECONNABORTED' || messageLower.includes('timeout')) {
+      return 'timeout_error'
+    }
+    if (
+      code === 'ENOTFOUND' ||
+      code === 'ECONNREFUSED' ||
+      code === 'ENETUNREACH' ||
+      messageLower.includes('network') ||
+      messageLower.includes('连接')
+    ) {
       return 'network_error'
     }
-    if (message.toLowerCase().includes('network') || message.toLowerCase().includes('websocket')) {
-      return 'network_error'
+
+    // WebSocket 错误
+    if (
+      messageLower.includes('websocket') ||
+      messageLower.includes('ws:') ||
+      messageLower.includes('wss:')
+    ) {
+      return 'websocket_error'
+    }
+
+    // CORS 错误
+    if (
+      messageLower.includes('cors') ||
+      messageLower.includes('cross-origin') ||
+      messageLower.includes('跨域')
+    ) {
+      return 'cors_error'
     }
 
     // 授权错误
-    if (status === 401 || status === 403 || message.includes('授权') || message.includes('auth')) {
+    if (
+      status === 401 ||
+      status === 403 ||
+      messageLower.includes('授权') ||
+      messageLower.includes('auth') ||
+      messageLower.includes('permission') ||
+      messageLower.includes('forbidden')
+    ) {
       return 'auth_error'
     }
 
-    // 服务器错误
+    // 链接过期
+    if (
+      status === 404 ||
+      status === 410 ||
+      messageLower.includes('expired') ||
+      messageLower.includes('过期') ||
+      messageLower.includes('not found')
+    ) {
+      return 'expired_url_error'
+    }
+
+    // 客户端错误（4xx）
+    if (status >= 400 && status < 500) {
+      return 'client_error'
+    }
+
+    // 服务器错误（5xx）
     if (status >= 500) {
       return 'server_error'
+    }
+
+    // 文件系统错误
+    if (
+      messageLower.includes('filesystem') ||
+      messageLower.includes('disk') ||
+      messageLower.includes('文件系统') ||
+      messageLower.includes('磁盘')
+    ) {
+      return 'filesystem_error'
     }
 
     // 默认未知错误

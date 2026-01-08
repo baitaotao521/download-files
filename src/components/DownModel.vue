@@ -559,7 +559,7 @@ onMounted(async() => {
     downloadedBytes.value = totalDownloaded
     lastUpdateTime.value = Date.now()
   })
-  fileDownloader.on('finshed', (cells) => {
+  fileDownloader.on('finished', (cells) => {
     isDownloading.value = false
     // 最后更新一次失败统计
     updateFailureStats()

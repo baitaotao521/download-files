@@ -30,16 +30,18 @@ const PROGRESS_THROTTLE_INTERVAL = 100
  * - 内存管理优化
  */
 class BrowserDownloader {
-  constructor(emitter, fileProcessor) {
+  constructor(emitter, fileProcessor, umamiTracker = null, downloadChannel = '') {
     this.emitter = emitter
     this.fileProcessor = fileProcessor
+    this.umamiTracker = umamiTracker
+    this.downloadChannel = downloadChannel
     this.zip = null
     this.isCancelled = false
     this.abortController = null
 
     // 初始化辅助模块
     this.progressThrottler = new ProgressThrottler(emitter, PROGRESS_THROTTLE_INTERVAL)
-    this.failureManager = new FailureManager(emitter)
+    this.failureManager = new FailureManager(emitter, umamiTracker, downloadChannel)
 
     // ObjectURL 管理,防止内存泄漏
     this.objectUrls = new Set()
