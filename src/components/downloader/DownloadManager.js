@@ -78,6 +78,21 @@ class DownloadManager {
       if (progressInfo.percentage === 100) {
         this.successCount++
       }
+
+      // 实时更新下载速度（用于性能统计）
+      const { size, percentage } = progressInfo
+      if (size && percentage !== undefined && this.startTime > 0) {
+        const now = Date.now()
+        const elapsedSeconds = (now - this.startTime) / 1000
+
+        if (elapsedSeconds > 0 && percentage > 0) {
+          const downloadedBytes = size * (percentage / 100)
+          const speedMBps = (downloadedBytes / elapsedSeconds) / (1024 * 1024)
+
+          // 更新 Umami 追踪器的速度统计
+          this.umamiTracker.updateSpeed(speedMBps)
+        }
+      }
     })
 
     this.emitter.on('error', () => {
@@ -92,7 +107,7 @@ class DownloadManager {
           fileCount: this.cellList.length,
           totalSize,
           duration: Date.now() - this.startTime,
-          downloadMode: this.config.downloadChannel
+          downloadChannel: this.config.downloadChannel // 使用标准参数名
         })
       }
     })
@@ -214,19 +229,15 @@ class DownloadManager {
           downloadChannel: this.config.downloadChannel
         })
 
-        // 统计下载速度性能
-        if (duration > 0 && totalSize > 0) {
+        // 统计下载速度（使用内部实时计算的速度）
+        if (duration > 1000 && this.successCount > 0) {
           const totalSizeMB = totalSize / (1024 * 1024)
-          const durationSeconds = duration / 1000
-          const averageSpeedMBps = totalSizeMB / durationSeconds
 
           this.umamiTracker.trackDownloadSpeed({
-            averageSpeedMBps,
-            peakSpeedMBps: averageSpeedMBps * 1.5, // 估算峰值速度
             fileCount: this.cellList.length,
             totalSizeMB,
             duration,
-            downloadMode: this.config.downloadChannel
+            downloadChannel: this.config.downloadChannel
           })
         }
       }
@@ -260,7 +271,7 @@ class DownloadManager {
       this.umamiTracker.trackDownloadFatalError({
         type: error?.name || 'Error',
         message: error?.message || '未知错误',
-        downloadMode: this.config.downloadChannel,
+        downloadChannel: this.config.downloadChannel, // 使用标准参数名
         code: error?.code,
         stack: error?.stack,
         httpStatus: error?.response?.status

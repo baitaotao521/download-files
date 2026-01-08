@@ -184,9 +184,22 @@ class BrowserDownloader {
         await this.getAttachmentUrl(fileInfo, oTable)
       } catch (error) {
         const errorType = this.failureManager.classifyError(error)
-        if (this.failureManager.shouldRefreshUrl(errorType, error?.response?.status)) {
+        const httpStatus = error?.response?.status
+
+        if (this.failureManager.shouldRefreshUrl(errorType, httpStatus)) {
+          // 埋点：临时链接刷新
+          if (this.umamiTracker) {
+            this.umamiTracker.trackRefreshTempUrl({
+              fileName: fileInfo.name,
+              httpStatus,
+              refreshSuccess: attempt < maxAttempts, // 还有重试机会
+              downloadMode: this.downloadChannel,
+              retryCount: attempt
+            })
+          }
           fileInfo.fileUrl = null
         }
+
         if (attempt < maxAttempts) {
           await sleep(300 * attempt)
           continue
@@ -268,9 +281,22 @@ class BrowserDownloader {
       }
 
       const errorType = this.failureManager.classifyError(err)
-      if (this.failureManager.shouldRefreshUrl(errorType, err?.response?.status)) {
+      const httpStatus = err?.response?.status
+
+      if (this.failureManager.shouldRefreshUrl(errorType, httpStatus)) {
+        // 埋点：临时链接刷新
+        if (this.umamiTracker) {
+          this.umamiTracker.trackRefreshTempUrl({
+            fileName: fileInfo.name,
+            httpStatus,
+            refreshSuccess: attempt < maxAttempts, // 还有重试机会
+            downloadMode: this.downloadChannel,
+            retryCount: attempt
+          })
+        }
         fileInfo.fileUrl = null
       }
+
       if (attempt < maxAttempts) {
         await sleep(300 * attempt)
         continue

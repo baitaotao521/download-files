@@ -90,41 +90,53 @@ class UmamiTracker {
   trackDownloadComplete(result = {}) {
     if (!this.isEnabled) return
 
-    const {
-      fileCount,
-      successCount,
-      failedCount,
-      duration,
-      isCancelled,
-      failureStats,
-      downloadChannel
-    } = result
+    try {
+      const {
+        fileCount,
+        successCount,
+        failedCount,
+        duration,
+        isCancelled,
+        failureStats,
+        downloadChannel
+      } = result
 
-    const eventData = {
-      ...this._getCommonParams(),
-      下载模式: this._getDownloadMode(downloadChannel),
-      文件总数: fileCount || 0,
-      成功数量: successCount || 0,
-      失败数量: failedCount || 0,
-      耗时秒: duration ? Math.round(duration / 1000) : 0,
-      成功率: fileCount ? parseFloat(((successCount / fileCount) * 100).toFixed(2)) : 0,
-      是否被取消: Boolean(isCancelled)
+      const eventData = {
+        ...this._getCommonParams(),
+        下载模式: this._getDownloadMode(downloadChannel),
+        文件总数: fileCount || 0,
+        成功数量: successCount || 0,
+        失败数量: failedCount || 0,
+        耗时秒: duration ? Math.round(duration / 1000) : 0,
+        成功率: fileCount ? parseFloat(((successCount / fileCount) * 100).toFixed(2)) : 0,
+        是否被取消: Boolean(isCancelled)
+      }
+
+      // 添加失败原因详细统计（仅当有失败时）
+      if (failureStats?.byType && Object.keys(failureStats.byType).length > 0) {
+        const typeMapping = {
+          network: '失败_网络错误',
+          auth: '失败_授权错误',
+          expired_url: '失败_链接过期',
+          server: '失败_服务器错误',
+          client: '失败_客户端错误',
+          timeout: '失败_超时错误',
+          cors: '失败_CORS错误',
+          filesystem: '失败_文件系统错误',
+          unknown: '失败_未知错误'
+        }
+
+        Object.entries(failureStats.byType).forEach(([type, count]) => {
+          if (count > 0 && typeMapping[type]) {
+            eventData[typeMapping[type]] = count
+          }
+        })
+      }
+
+      window.umami.track('下载_完成', eventData)
+    } catch (error) {
+      console.warn('[UmamiTracker] trackDownloadComplete 失败:', error)
     }
-
-    // 添加失败原因详细统计
-    if (failureStats && failureStats.byType) {
-      eventData.失败_网络错误 = failureStats.byType.network || 0
-      eventData.失败_授权错误 = failureStats.byType.auth || 0
-      eventData.失败_链接过期 = failureStats.byType.expired_url || 0
-      eventData.失败_服务器错误 = failureStats.byType.server || 0
-      eventData.失败_客户端错误 = failureStats.byType.client || 0
-      eventData.失败_超时错误 = failureStats.byType.timeout || 0
-      eventData.失败_CORS错误 = failureStats.byType.cors || 0
-      eventData.失败_文件系统错误 = failureStats.byType.filesystem || 0
-      eventData.失败_未知错误 = failureStats.byType.unknown || 0
-    }
-
-    window.umami.track('下载_完成', eventData)
   }
 
   /**
@@ -134,44 +146,48 @@ class UmamiTracker {
   trackDownloadCancel(cancelInfo = {}) {
     if (!this.isEnabled) return
 
-    const {
-      reason,
-      fileCount,
-      successCount,
-      failedCount,
-      duration,
-      downloadChannel,
-      errorCode,
-      errorStack
-    } = cancelInfo
+    try {
+      const {
+        reason,
+        fileCount,
+        successCount,
+        failedCount,
+        duration,
+        downloadChannel,
+        errorCode,
+        errorStack
+      } = cancelInfo
 
-    const reasonMap = {
-      user_manual_cancel: '用户主动取消',
-      network_error: '网络异常中断',
-      auth_error: '授权失败中断',
-      server_error: '服务器错误中断',
-      websocket_error: 'WebSocket断开',
-      unknown_error: '未知错误中断'
+      const reasonMap = {
+        user_manual_cancel: '用户主动取消',
+        network_error: '网络异常中断',
+        auth_error: '授权失败中断',
+        server_error: '服务器错误中断',
+        websocket_error: 'WebSocket断开',
+        unknown_error: '未知错误中断'
+      }
+
+      const eventData = {
+        ...this._getCommonParams(),
+        下载模式: this._getDownloadMode(downloadChannel),
+        取消原因: reasonMap[reason] || reason || '未知',
+        文件总数: fileCount || 0,
+        已完成数量: successCount || 0,
+        已失败数量: failedCount || 0,
+        已耗时秒: duration ? Math.round(duration / 1000) : 0,
+        完成进度: fileCount ? parseFloat((((successCount + failedCount) / fileCount) * 100).toFixed(2)) : 0
+      }
+
+      // 添加错误详情（仅在异常中断时）
+      if (reason !== 'user_manual_cancel') {
+        if (errorCode) eventData.错误代码 = errorCode
+        if (errorStack) eventData.错误堆栈 = errorStack.substring(0, 200) // 截取前200字符
+      }
+
+      window.umami.track('下载_取消', eventData)
+    } catch (error) {
+      console.warn('[UmamiTracker] trackDownloadCancel 失败:', error)
     }
-
-    const eventData = {
-      ...this._getCommonParams(),
-      下载模式: this._getDownloadMode(downloadChannel),
-      取消原因: reasonMap[reason] || reason || '未知',
-      文件总数: fileCount || 0,
-      已完成数量: successCount || 0,
-      已失败数量: failedCount || 0,
-      已耗时秒: duration ? Math.round(duration / 1000) : 0,
-      完成进度: fileCount ? parseFloat((((successCount + failedCount) / fileCount) * 100).toFixed(2)) : 0
-    }
-
-    // 添加错误详情（仅在异常中断时）
-    if (reason !== 'user_manual_cancel') {
-      if (errorCode) eventData.错误代码 = errorCode
-      if (errorStack) eventData.错误堆栈 = errorStack.substring(0, 200) // 截取前200字符
-    }
-
-    window.umami.track('下载_取消', eventData)
   }
 
   /**
@@ -181,32 +197,37 @@ class UmamiTracker {
   trackDownloadFatalError(error = {}) {
     if (!this.isEnabled) return
 
-    const {
-      type,
-      message,
-      downloadMode,
-      code,
-      stack,
-      httpStatus,
-      url,
-      fileName
-    } = error
+    try {
+      const {
+        type,
+        message,
+        downloadMode,
+        downloadChannel, // 兼容新参数名
+        code,
+        stack,
+        httpStatus,
+        url,
+        fileName
+      } = error
 
-    const eventData = {
-      ...this._getCommonParams(),
-      下载模式: this._getDownloadMode(downloadMode),
-      错误类型: type || '未知',
-      错误信息: message || '未知错误',
-      错误代码: code || '',
-      HTTP状态码: httpStatus || 0,
-      错误堆栈: stack ? stack.substring(0, 200) : ''
+      const eventData = {
+        ...this._getCommonParams(),
+        下载模式: this._getDownloadMode(downloadChannel, downloadMode), // 优先使用 downloadChannel
+        错误类型: type || '未知',
+        错误信息: message || '未知错误',
+        错误代码: code || '',
+        HTTP状态码: httpStatus || 0,
+        错误堆栈: stack ? stack.substring(0, 200) : ''
+      }
+
+      // 添加上下文信息
+      if (url) eventData.错误URL = url.substring(0, 100)
+      if (fileName) eventData.错误文件 = fileName
+
+      window.umami.track('下载_致命错误', eventData)
+    } catch (err) {
+      console.warn('[UmamiTracker] trackDownloadFatalError 失败:', err)
     }
-
-    // 添加上下文信息
-    if (url) eventData.错误URL = url.substring(0, 100)
-    if (fileName) eventData.错误文件 = fileName
-
-    window.umami.track('下载_致命错误', eventData)
   }
 
   /**
@@ -406,24 +427,33 @@ class UmamiTracker {
   trackDownloadSpeed(speedInfo = {}) {
     if (!this.isEnabled) return
 
-    const {
-      averageSpeedMBps,
-      peakSpeedMBps,
-      fileCount,
-      totalSizeMB,
-      duration,
-      downloadMode
-    } = speedInfo
+    try {
+      const {
+        averageSpeedMBps,
+        peakSpeedMBps,
+        fileCount,
+        totalSizeMB,
+        duration,
+        downloadMode,
+        downloadChannel // 兼容新参数名
+      } = speedInfo
 
-    window.umami.track('性能_下载速度', {
-      ...this._getCommonParams(),
-      下载模式: this._getDownloadMode(downloadMode),
-      平均速度MBps: averageSpeedMBps ? parseFloat(averageSpeedMBps.toFixed(2)) : 0,
-      峰值速度MBps: peakSpeedMBps ? parseFloat(peakSpeedMBps.toFixed(2)) : 0,
-      文件总数: fileCount || 0,
-      总大小MB: totalSizeMB || 0,
-      总耗时秒: duration ? Math.round(duration / 1000) : 0
-    })
+      // 如果没有传入速度参数，使用内部统计的速度
+      const actualAverageSpeed = averageSpeedMBps ?? this.getAverageSpeed()
+      const actualPeakSpeed = peakSpeedMBps ?? this.peakSpeedMBps
+
+      window.umami.track('性能_下载速度', {
+        ...this._getCommonParams(),
+        下载模式: this._getDownloadMode(downloadChannel, downloadMode),
+        平均速度MBps: actualAverageSpeed ? parseFloat(actualAverageSpeed.toFixed(2)) : 0,
+        峰值速度MBps: actualPeakSpeed ? parseFloat(actualPeakSpeed.toFixed(2)) : 0,
+        文件总数: fileCount || 0,
+        总大小MB: totalSizeMB || 0,
+        总耗时秒: duration ? Math.round(duration / 1000) : 0
+      })
+    } catch (error) {
+      console.warn('[UmamiTracker] trackDownloadSpeed 失败:', error)
+    }
   }
 }
 
