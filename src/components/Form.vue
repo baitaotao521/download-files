@@ -53,7 +53,7 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item :label="$t('view_column')" prop="viewId">
+      <el-form-item :label="$t('view_column')" prop="viewId" v-loading="tableLoading">
         <template #label>
           <p style="display: flex; align-items: center">
             <span style="margin-right: 2px">{{ $t("view_column") }}</span>
@@ -74,6 +74,7 @@
           v-model="formData.viewId"
           :placeholder="$t('select_view')"
           style="width: 100%"
+          :disabled="tableLoading"
         >
           <el-option
             v-for="meta in viewList"
@@ -83,12 +84,13 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item :label="$t('attachment_fields')" prop="attachmentFileds">
+      <el-form-item :label="$t('attachment_fields')" prop="attachmentFileds" v-loading="tableLoading">
         <el-select
           v-model="formData.attachmentFileds"
           multiple
           :placeholder="$t('select_attachment_fields')"
           style="width: 100%"
+          :disabled="tableLoading"
         >
           <template #empty>
             <div class="empty-attachment-tip">
@@ -119,6 +121,7 @@
         :label="$t('file_name_field')"
         prop="fileNameByField"
         v-if="formData.fileNameType === 1"
+        v-loading="tableLoading"
       >
         <template #label>
           <p style="display: flex; align-items: center">
@@ -141,6 +144,7 @@
           :placeholder="$t('select_file_name_field')"
           style="width: 100%"
           multiple
+          :disabled="tableLoading"
         >
           <el-option
             :label="item.name"
@@ -318,12 +322,14 @@
           :label="$t('first_directory')"
           prop="firstFolderKey"
           v-if="folderClassificationAvailable && formData.downloadTypeByFolders"
+          v-loading="tableLoading"
         >
           <el-select
             v-model="formData.firstFolderKey"
             :placeholder="$t('select_first_directory')"
             style="width: 100%"
             clearable
+            :disabled="tableLoading"
           >
             <el-option
               v-for="meta in singleSelectList"
@@ -364,12 +370,14 @@
           :label="$t('second_directory')"
           prop="secondFolderKey"
           v-if="folderClassificationAvailable && formData.downloadTypeByFolders"
+          v-loading="tableLoading"
         >
           <el-select
             clearable
             v-model="formData.secondFolderKey"
           :placeholder="$t('select_second_directory')"
           style="width: 100%"
+          :disabled="tableLoading"
         >
           <el-option
             v-for="meta in singleSelectList"
@@ -510,7 +518,7 @@ import { ElMessageBox } from 'element-plus'
 const DownModel = defineAsyncComponent(() => import('./DownModel.vue'))
 import draggable from 'vuedraggable'
 
-import { SUPPORT_TYPES, getInfoByTableMetaList, sortByOrder } from '@/hooks/useBitable.js'
+import { SUPPORT_TYPES, getInfoByTableMetaList, getTableDetailInfo, sortByOrder } from '@/hooks/useBitable.js'
 import { i18n } from '@/locales/i18n.js'
 import { compareSemanticVersions } from '@/utils/index.js'
 
@@ -525,6 +533,7 @@ const WEBSOCKET_PROBE_TYPE = 'feishu_attachment_probe'
 const WEBSOCKET_CONFIG_TYPE = 'feishu_attachment_config'
 const elform = ref(null)
 const loading = ref(true)
+const tableLoading = ref(false) // 切换数据表时的加载状态
 const downModelVis = ref(false)
 const confirmSelectedDialogVis = ref(false)
 const pendingSelectedIds = ref([])
@@ -739,7 +748,9 @@ const rules = reactive({
 })
 const datas = reactive({
   allInfo: [],
-  finshDownload: false
+  finshDownload: false,
+  tableMetaList: [], // 存储所有数据表的基本信息（仅 id 和 name）
+  loadedTableIds: new Set() // 记录已加载详细信息的表 ID
 })
 const activeTableInfo = computed(() => {
   const item = datas.allInfo.find((item) => item.tableId === formData.tableId)
@@ -800,7 +811,25 @@ const singleSelectList = computed(() => {
 })
 watch(
   () => formData.tableId,
-  () => {
+  async(newTableId) => {
+    // 懒加载当前选中表的详细信息
+    if (newTableId && !datas.loadedTableIds.has(newTableId)) {
+      tableLoading.value = true // 开启加载状态
+      try {
+        const tableMeta = datas.tableMetaList.find((t) => t.id === newTableId)
+        if (tableMeta) {
+          const detailInfo = await getTableDetailInfo(newTableId, tableMeta.name)
+          const index = datas.allInfo.findIndex((t) => t.tableId === newTableId)
+          if (index !== -1) {
+            datas.allInfo[index] = detailInfo
+          }
+          datas.loadedTableIds.add(newTableId)
+        }
+      } finally {
+        tableLoading.value = false // 关闭加载状态
+      }
+    }
+
     const isExit = viewList.value.find((e) => e.id === formData.viewId)
     if (!isExit) {
       formData.viewId = viewList.value.length ? viewList.value[0]['id'] : ''
@@ -1092,21 +1121,44 @@ const submit = async() => {
 }
 
 onMounted(async() => {
+  // 【优化】仅获取数据表基本信息（id 和 name）
   let tableMetaList = await bitable.base.getTableMetaList()
-  // 无权限用户。通过以上接口会返回数据，但是name为空
   tableMetaList = tableMetaList.filter((e) => !!e.name)
   console.log('tableMetaList', tableMetaList)
-  datas.allInfo = await getInfoByTableMetaList(tableMetaList)
-  console.log('allInfo', datas.allInfo)
 
-  // 刚渲染本插件的时候，用户所选的tableId等信息
+  // 存储基本信息，用于下拉列表展示
+  datas.tableMetaList = tableMetaList
+  datas.allInfo = tableMetaList.map((t) => ({
+    tableId: t.id,
+    tableName: t.name,
+    fieldMetaList: [],
+    viewMetaList: []
+  }))
+
+  // 获取当前用户选中的表
   const selection = await bitable.base.getSelection()
-  formData.tableId = selection?.tableId || ''
+  const selectedTableId = selection?.tableId || tableMetaList[0]?.id || ''
+
+  // 【优化】仅加载当前选中表的详细信息
+  if (selectedTableId) {
+    const tableMeta = tableMetaList.find((t) => t.id === selectedTableId)
+    if (tableMeta) {
+      const detailInfo = await getTableDetailInfo(selectedTableId, tableMeta.name)
+      const index = datas.allInfo.findIndex((t) => t.tableId === selectedTableId)
+      if (index !== -1) {
+        datas.allInfo[index] = detailInfo
+      }
+      datas.loadedTableIds.add(selectedTableId)
+    }
+  }
+
+  formData.tableId = selectedTableId
   formData.viewId = selection?.viewId || ''
   formData.appToken = selection?.baseId || ''
   formData.attachmentFileds = attachmentList.value.map((e) => e.id)
   formData.selectedRecordIds = []
 
+  console.log('allInfo (lazy loaded)', datas.allInfo)
   loading.value = false
 })
 </script>

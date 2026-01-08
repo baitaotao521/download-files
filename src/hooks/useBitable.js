@@ -68,6 +68,23 @@ export async function getInfoByTableMetaList(tableMetaList) {
   return results
 }
 
+/**
+ * 懒加载单个数据表的详细信息
+ * @param {string} tableId - 数据表 ID
+ * @param {string} tableName - 数据表名称
+ */
+export async function getTableDetailInfo(tableId, tableName) {
+  const table = await bitable.base.getTableById(tableId)
+  const fieldMetaList = await table.getFieldMetaList()
+  const viewMetaList = await table.getViewMetaList()
+  return {
+    tableId,
+    tableName,
+    fieldMetaList,
+    viewMetaList
+  }
+}
+
 export function sortByOrder(arrayA, arrayB) {
   // 创建一个映射，以B数组的id为键，值为它们在B数组中的索引
   const orderMap = new Map(arrayB.map((item, index) => [item.id, index]))
